@@ -1,0 +1,94 @@
+{
+  "id": "opss.customizable-floating-window",
+  "name": "可自定义悬浮窗",
+  "version": "1.0.0",
+  "description": "A customizable floating window for MicYou status monitoring and control.",
+  "descriptionI18n": {
+    "zh": "可自定义的悬浮窗：用 .slint 主题文件绘制透明悬浮窗，实时展示音频状态与本次连接时长，左键切静音、拖动移窗、右键菜单。",
+    "zh-CN": "可自定义的悬浮窗：用 .slint 主题文件绘制透明悬浮窗，实时展示音频状态与本次连接时长，左键切静音、拖动移窗、右键菜单。"
+  },
+  "nameI18n": {
+    "zh": "可自定义悬浮窗",
+    "zh-CN": "可自定义悬浮窗",
+    "en": "Customizable Floating Window"
+  },
+  "license": "Unlicense",
+  "runtime": "native",
+  "entry": "customizable_floating_window",
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "arches": [
+    "x86_64",
+    "aarch64"
+  ],
+  "apiVersion": 2,
+  "capabilities": [
+    "audio.state",
+    "control.observe",
+    "control.intercept",
+    "config.read",
+    "config.write"
+  ],
+  "kind": "ui",
+  "ui": {
+    "route": "panel",
+    "label": "悬浮窗",
+    "panels": [
+      {
+        "id": "settings",
+        "label": "悬浮窗设置",
+        "entry": "panel.html"
+      }
+    ]
+  },
+  "keywords": [
+    "floating-window",
+    "slint",
+    "hud",
+    "volume-ring",
+    "overlay",
+    "theme"
+  ],
+  "config": {
+    "theme": "ring.slint",
+    "visible": true,
+    "updateMs": 100,
+    "windowX": null,
+    "windowY": null,
+    "themeList": [],
+    "themeError": "",
+    "helperState": "idle",
+    "status": {}
+  },
+  "configSchema": {
+    "fields": [
+      {
+        "key": "visible",
+        "fieldType": "boolean",
+        "label": "显示悬浮窗 Show floating window",
+        "description": "关闭后悬浮窗进程挂起（释放内存），重新开启时自动恢复。",
+        "default": true
+      },
+      {
+        "key": "theme",
+        "fieldType": "string",
+        "label": "主题文件 Theme file",
+        "description": "themes/ 目录下的 .slint 文件名。推荐在插件面板的下拉列表中选择（可实时热切换）。",
+        "default": "ring.slint"
+      },
+      {
+        "key": "updateMs",
+        "fieldType": "number",
+        "label": "状态刷新间隔 Refresh interval (ms)",
+        "description": "宿主音频状态推送周期，50–1000ms。越小越跟手，CPU 占用略增。",
+        "min": 50,
+        "max": 1000,
+        "step": 10,
+        "default": 100
+      }
+    ]
+  }
+}
