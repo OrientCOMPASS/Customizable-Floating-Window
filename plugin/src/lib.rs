@@ -83,6 +83,8 @@ struct Cfg {
     theme: String,
     visible: bool,
     update_ms: u64,
+    wdis_enabled: bool,
+    wdis_hold_ms: u64,
 }
 
 struct Core {
@@ -130,6 +132,8 @@ impl Core {
                 theme: DEFAULT_THEME.to_string(),
                 visible: true,
                 update_ms: 100,
+                wdis_enabled: true,
+                wdis_hold_ms: 4000,
             },
             win_pos: None,
             interval_id: 0,
@@ -173,6 +177,16 @@ impl Core {
         {
             self.cfg.update_ms = v.clamp(50, 1000);
         }
+        if let Some(v) = abi::get_config("wdisEnabled")
+            .and_then(|s| serde_json::from_str::<bool>(&s).ok())
+        {
+            self.cfg.wdis_enabled = v;
+        }
+        if let Some(v) = abi::get_config("wdisHoldMs")
+            .and_then(|s| serde_json::from_str::<u64>(&s).ok())
+        {
+            self.cfg.wdis_hold_ms = v.clamp(1000, 30_000);
+        }
         let x = abi::get_config("windowX").and_then(|s| serde_json::from_str::<i32>(&s).ok());
         let y = abi::get_config("windowY").and_then(|s| serde_json::from_str::<i32>(&s).ok());
         self.win_pos = match (x, y) {
@@ -189,6 +203,11 @@ impl Core {
 
     // ── themes ──
 
+    /// Write bundled themes. Upgrade policy: a file carrying the
+    /// `// cfw-bundled:` marker is considered factory content and is
+    /// refreshed on plugin upgrade; marker-less files are user property and
+    /// are never touched (users who edit a built-in theme should remove the
+    /// marker line or copy it to a new file name).
     fn ensure_themes(&self) {
         if let Err(e) = std::fs::create_dir_all(&self.themes_dir) {
             abi::log_error(&format!("cannot create themes dir: {e}"));
@@ -196,9 +215,16 @@ impl Core {
         }
         for (name, src) in BUNDLED {
             let p = self.themes_dir.join(name);
-            if !p.exists() {
+            let existing = std::fs::read_to_string(&p).ok();
+            let write = match existing.as_deref() {
+                None => true,
+                Some(old) => old.contains("cfw-bundled:") && old != *src,
+            };
+            if write {
                 if let Err(e) = std::fs::write(&p, src) {
                     abi::log_warn(&format!("cannot write bundled theme {name}: {e}"));
+                } else if existing.is_some() {
+                    abi::log_info(&format!("bundled theme upgraded: {name}"));
                 }
             }
         }
@@ -882,6 +908,26 @@ pub unsafe extern "C" fn micyou_plugin_handle_message(
         } else {
             unsafe { std::slice::from_raw_parts(payload, payload_len as usize) }
         };
+
+        // ── WhatdidIsay (WDIS) broadcast: magic | start i64 | end i64 | text ──
+        // Checked before topic routing: the broadcaster uses the host bus
+        // broadcast and consumers identify frames by magic number only.
+        if bytes.len() >= 20 && &bytes[0..4] == b"WDIS" {
+            let text = String::from_utf8_lossy(&bytes[20..]).trim().to_string();
+            if !text.is_empty() {
+                let _ = with_core(|core| {
+                    if core.cfg.wdis_enabled {
+                        if let Some(h) = core.helper.as_ref() {
+                            h.send(&cfw_protocol::Cmd::Wdis {
+                                text,
+                                hold_ms: core.cfg.wdis_hold_ms,
+                            });
+                        }
+                    }
+                });
+            }
+            return mpl_result_t::MPL_OK;
+        }
 
         match topic.as_str() {
             "interval:tick" => {

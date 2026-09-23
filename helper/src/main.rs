@@ -50,10 +50,17 @@ struct Ui {
     /// Wave-bar animation phase (degrees), advanced by the smoothing timer.
     phase: f64,
     dragging: bool,
-    /// Grab offset inside the window (logical px), from `drag-start`.
+    /// v3: helper-side global-cursor tracking active for this drag.
+    drag_global: bool,
+    drag_p0: Option<PhysicalPosition>,
+    drag_c0: Option<(f64, f64)>,
+    drag_timer: Option<Timer>,
+    /// Grab offset inside the window (logical px) — v2 fallback (Wayland).
     drag_grab: Option<(f64, f64)>,
     drag_scale: f32,
     drag_events: u32,
+    /// Auto-hide timer for the WDIS transcript area.
+    wdis_timer: Option<Timer>,
     last_pos: Option<PhysicalPosition>,
 }
 
@@ -66,9 +73,14 @@ impl Ui {
             last_applied_smooth: f64::NAN,
             phase: 0.0,
             dragging: false,
+            drag_global: false,
+            drag_p0: None,
+            drag_c0: None,
+            drag_timer: None,
             drag_grab: None,
             drag_scale: 1.0,
             drag_events: 0,
+            wdis_timer: None,
             last_pos: None,
         }
     }
@@ -307,6 +319,12 @@ fn activate_theme(theme: LoadedTheme, shared: Arc<Shared>, reloaded: bool) {
         u.smooth = 0.0;
         u.last_applied_smooth = f64::NAN;
         u.dragging = false;
+        u.drag_global = false;
+        u.drag_p0 = None;
+        u.drag_c0 = None;
+        if let Some(t) = u.drag_timer.take() {
+            t.stop();
+        }
         u.drag_grab = None;
         u.drag_events = 0;
         u.last_pos = None;
@@ -499,39 +517,76 @@ fn attach_callbacks(theme: &LoadedTheme) {
         });
     }
     if has(theme::CB_DRAG_START) {
-        // v2 protocol: args = mouse position inside the window (logical px)
-        // at press time — the grab anchor `g`.
+        // v3: the helper tracks the GLOBAL cursor itself (platform FFI) and
+        // moves the window 1:1 — no window-relative feedback loop, no WM
+        // grab, and the theme keeps receiving every button event (so
+        // click-vs-drag and right-click keep working). Falls back to the v2
+        // window-relative protocol where global cursor is unavailable
+        // (Wayland): themes still send drag-move() for that case.
         let _ = inst.set_callback(theme::CB_DRAG_START, |args| {
             let g = match (args.first(), args.get(1)) {
                 (Some(Value::Number(a)), Some(Value::Number(b))) => Some((*a, *b)),
                 _ => None,
             };
-            let scale = with_window(|w| w.scale_factor()).unwrap_or(1.0);
+            let (scale, p0) = with_window(|w| (w.scale_factor(), w.position()))
+                .unwrap_or((1.0, PhysicalPosition::new(0, 0)));
+            let c0 = platform::global_cursor(scale);
             UI.with(|u| {
                 let mut u = u.borrow_mut();
                 u.drag_events = 0;
                 u.dragging = true;
                 u.drag_grab = g;
                 u.drag_scale = scale;
+                u.drag_global = c0.is_some() && platform::position_api_usable();
+                u.drag_p0 = Some(p0);
+                u.drag_c0 = c0;
+                // stop any previous tracker
+                if let Some(t) = u.drag_timer.take() {
+                    t.stop();
+                }
+                if u.drag_global {
+                    let mut t = Timer::default();
+                    t.start(TimerMode::Repeated, Duration::from_millis(8), move || {
+                        let (on, p0, c0, scale) = UI.with(|u| {
+                            let u = u.borrow();
+                            (u.dragging && u.drag_global, u.drag_p0, u.drag_c0, u.drag_scale)
+                        });
+                        if !on {
+                            return;
+                        }
+                        let (Some(p0), Some(c0)) = (p0, c0) else { return };
+                        let Some(c) = platform::global_cursor(scale) else { return };
+                        let _ = with_window(|w| {
+                            w.set_position(PhysicalPosition::new(
+                                p0.x + (c.0 - c0.0).round() as i32,
+                                p0.y + (c.1 - c0.1).round() as i32,
+                            ))
+                        });
+                    });
+                    u.drag_timer = Some(t);
+                }
             });
             Value::Void
         });
     }
     if has(theme::CB_DRAG_MOVE) {
-        // v2 protocol: args = CURRENT mouse position inside the (moving)
-        // window, logical px. Cursor screen pos C = P_cur + m*scale; the
-        // window must sit at P = C - g*scale. Absolute per event → no
-        // feedback loop, no drift, 1:1 tracking.
+        // v2 fallback (used only when the global cursor is unavailable,
+        // e.g. Wayland): args = CURRENT mouse position inside the window,
+        // logical px; P = C − g·scale, absolute per event (exact, no drift).
         let _ = inst.set_callback(theme::CB_DRAG_MOVE, |args| {
             let (mx, my) = match (args.first(), args.get(1)) {
                 (Some(Value::Number(a)), Some(Value::Number(b))) => (*a, *b),
                 _ => return Value::Void,
             };
-            let (dragging, grab, scale) = UI.with(|u| {
+            let (dragging, global, grab, scale) = UI.with(|u| {
                 let u = u.borrow();
-                (u.dragging, u.drag_grab, u.drag_scale)
+                (u.dragging, u.drag_global, u.drag_grab, u.drag_scale)
             });
-            if !dragging {
+            if !dragging || global {
+                // global-cursor tracker owns this drag; ignore v2 messages
+                if dragging && global {
+                    UI.with(|u| u.borrow_mut().drag_events += 1);
+                }
                 return Value::Void;
             }
             UI.with(|u| u.borrow_mut().drag_events += 1);
@@ -563,6 +618,12 @@ fn attach_callbacks(theme: &LoadedTheme) {
                 let mut u = u.borrow_mut();
                 let n = u.drag_events;
                 u.dragging = false;
+                u.drag_global = false;
+                u.drag_p0 = None;
+                u.drag_c0 = None;
+                if let Some(t) = u.drag_timer.take() {
+                    t.stop();
+                }
                 u.drag_grab = None;
                 n
             });
@@ -650,6 +711,9 @@ fn stdin_thread(shared: Arc<Shared>) {
             Cmd::Snapshot { path } => {
                 post_to_ui(&shared, move || take_snapshot(&path));
             }
+            Cmd::Wdis { text, hold_ms } => {
+                post_to_ui(&shared, move || show_wdis(text, hold_ms));
+            }
             Cmd::Quit => {
                 let _ = slint::invoke_from_event_loop(|| {
                     ipc::emit(&Ev::Bye);
@@ -719,6 +783,42 @@ fn reload_theme(path: PathBuf, shared: Arc<Shared>) {
     // Success: swap (activate_theme emits Ready{reloaded:true}; the plugin
     // clears themeError when it sees Ready).
     activate_theme(new_theme, shared, true);
+}
+
+/// Show a WhatdidIsay transcript in the theme (if it implements the
+/// optional `wdis-text` / `wdis-visible` contract members) and schedule the
+/// auto-hide after `hold_ms`.
+fn show_wdis(text: String, hold_ms: u64) {
+    UI.with(|u| {
+        let u = u.borrow();
+        if let Some(t) = u.theme.as_ref() {
+            if t.props.contains("wdis-text") {
+                let _ = t.instance.set_property("wdis-text", Value::String(text.into()));
+            }
+            if t.props.contains("wdis-visible") {
+                let r = t.instance.set_property("wdis-visible", Value::Bool(true));
+                let _ = r;
+            }
+        }
+    });
+    UI.with(|u| {
+        let mut u = u.borrow_mut();
+        if let Some(old) = u.wdis_timer.take() {
+            old.stop();
+        }
+        let mut t = Timer::default();
+        t.start(TimerMode::SingleShot, Duration::from_millis(hold_ms), || {
+            UI.with(|u| {
+                let u = u.borrow();
+                if let Some(t) = u.theme.as_ref() {
+                    if t.props.contains("wdis-visible") {
+                        let _ = t.instance.set_property("wdis-visible", Value::Bool(false));
+                    }
+                }
+            });
+        });
+        u.wdis_timer = Some(t);
+    });
 }
 
 fn take_snapshot(path: &str) {
@@ -798,6 +898,11 @@ fn run_selftest(theme_path: &Path, prefix: String, shared: Arc<Shared>) {
         device_mode: "wifi".into(),
     };
     set_state(&streaming, &shared);
+    if std::env::var_os("CFW_SELFTEST_WDIS").is_some() {
+        Timer::single_shot(Duration::from_millis(300), || {
+            show_wdis("Hello everyone, let's start the meeting.".into(), 5000);
+        });
+    }
 
     let p1 = format!("{prefix}-stream.png");
     let p2 = format!("{prefix}-muted.png");

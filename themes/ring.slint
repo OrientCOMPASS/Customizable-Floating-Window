@@ -1,3 +1,4 @@
+// cfw-bundled: 2   (built-in theme revision; remove this line to freeze your own edits)
 // ring.slint — 默认悬浮窗主题：复刻 MicYou v1 的悬浮音量环
 //
 // 84×84 透明无边框置顶圆窗：
@@ -30,6 +31,8 @@ export component FloatingRing inherits Window {
     in property <string> device-mode: "";
     in property <string> arc-path: "";         // 100×100 视图框内的圆弧路径（随平滑电平）
     in property <string> bars-path: "";        // 100×100 视图框内的 8 根旋转波形条线段
+    in property <string> wdis-text: "";        // WDIS 语音转录文本（可选契约）
+    in property <bool> wdis-visible: false;    // WDIS 展示开关（helper 定时收回）
 
     // ── 交互输出（helper 已挂接） ──────────────────────────────
     callback mute-toggle();
@@ -49,7 +52,8 @@ export component FloatingRing inherits Window {
     property <length> ring-r: 34px;            // 圆环中心半径
     property <length> stroke-u: 5.3px;         // 描边宽度（视图框单位，映射后 ≈4px）
 
-    width: win; height: win;
+    // 窗口高度随 WDIS 展示区向下生长（顶边锚定不动）
+    width: win; height: win + box-h;
     no-frame: true;
     always-on-top: true;
     background: transparent;
@@ -61,6 +65,11 @@ export component FloatingRing inherits Window {
     property <length> max-move: 0px;
     property <bool> pressing: false;
     property <int> move-events: 0;
+    // WDIS 展示区高度（伸出/收回动画）与透明度（渐变消失）
+    property <length> box-h: wdis-visible ? 40px : 0px;
+    property <float> box-alpha: wdis-visible ? 1 : 0;
+    animate box-h { duration: 260ms; easing: ease; }
+    animate box-alpha { duration: 420ms; easing: ease; }
 
     // ── 耳返提示外环 ──
     Path {
@@ -147,8 +156,28 @@ export component FloatingRing inherits Window {
         opacity: root.muted ? 1 : 0;
     }
 
+    // ── WDIS 转录展示区：宽 = 直径，下方伸出，渐变消失 ──
+    Rectangle {
+        x: 0px; y: root.win;
+        width: root.win; height: root.box-h;
+        border-radius: 10px;
+        background: #16181d;
+        opacity: root.box-alpha * 0.92;
+        clip: true;
+        Text {
+            x: 6px; y: 4px;
+            width: parent.width - 12px; height: parent.height - 8px;
+            text: root.wdis-text;
+            color: #e8eaed;
+            font-size: 10px;
+            wrap: word-wrap;
+            overflow: elide;
+            vertical-alignment: top;
+        }
+    }
+
     // ── 交互层 ──
-    // 左键：单击（移动事件 <2 次）= 切静音；拖动 = 移窗（drag v2 协议）
+    // 左键：单击（移动事件 <2 次）= 切静音；拖动 = 移窗（helper 全局光标跟踪）
     // 右键：切换耳返
     TouchArea {
         mouse-cursor: pointer;
@@ -160,11 +189,10 @@ export component FloatingRing inherits Window {
             } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
                 if (root.pressing) {
                     root.pressing = false;
+                    root.drag-end();                 // 两种情况都结束跟踪
                     if (root.move-events < 2) {
                         root.mute-toggle();          // 单击 = 切换静音
-                    } else {
-                        root.drag-end();             // 拖动结束 = 上报位置
-                    }
+                    }                                // 否则位置已由 drag-end 上报
                 }
             } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
                 root.monitoring-toggle();            // 右键 = 切换耳返

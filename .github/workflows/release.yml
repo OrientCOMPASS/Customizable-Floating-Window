@@ -36,14 +36,17 @@ jobs:
             target: x86_64-pc-windows-msvc
             helper: floating-helper-windows-x86_64.exe
             libname: customizable_floating_window.dll
+            libext: dll
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             helper: floating-helper-linux-x86_64
             libname: customizable_floating_window.so
+            libext: so
           - os: macos-latest
             target: aarch64-apple-darwin
             helper: floating-helper-macos-aarch64
             libname: customizable_floating_window.dylib
+            libext: dylib
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -82,16 +85,16 @@ jobs:
           mkdir -p $OUT/bin $OUT/themes
           LIB=target/${{ matrix.target }}/release
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp $LIB/customizable_floating_window.dll $OUT/${{ matrix.libname }}
+            cp $LIB/customizable_floating_window.${{ matrix.libext }} \
+               $OUT/${{ matrix.libname }}
             cp $LIB/floating_helper.exe $OUT/bin/${{ matrix.helper }}
           else
             # strip the unix lib prefix so the host's auto-extension works
-            cp $LIB/libcustomizable_floating_window.${{ matrix.libname##*. }} \
+            cp $LIB/libcustomizable_floating_window.${{ matrix.libext }} \
                $OUT/${{ matrix.libname }}
             cp $LIB/floating_helper $OUT/bin/${{ matrix.helper }}
             chmod +x $OUT/bin/${{ matrix.helper }}
           fi
-          echo "${{ matrix.target }}" > $OUT/.target
 
       - uses: actions/upload-artifact@v4
         with:

@@ -491,3 +491,115 @@ unsafe fn intern(
         )
     }
 }
+
+// ─────────────────────────── global cursor ───────────────────────────
+
+/// Global cursor position in **physical pixels**, for the helper-side drag
+/// tracker (drag protocol v3). Returns None where unavailable (Wayland).
+///
+/// Using global coordinates removes the window-relative feedback loop
+/// entirely: the cursor frame is independent of the window we move, so
+/// `P = P0 + (C − C0)` is exact by construction (system-drag quality
+/// without a WM grab, and the client keeps every button event).
+#[cfg(windows)]
+pub fn global_cursor(_scale: f32) -> Option<(f64, f64)> {
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+    extern "system" {
+        fn GetCursorPos(lp: *mut Point) -> i32;
+    }
+    unsafe {
+        let mut p = Point { x: 0, y: 0 };
+        if GetCursorPos(&mut p) != 0 {
+            Some((p.x as f64, p.y as f64))
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", not(target_os = "android")))]
+pub fn global_cursor(_scale: f32) -> Option<(f64, f64)> {
+    use x11_dl::xlib;
+    if is_wayland() {
+        return None;
+    }
+    thread_local! {
+        static DISP: std::cell::Cell<Option<*mut xlib::Display>> = const { std::cell::Cell::new(None) };
+    }
+    let Ok(xlib) = xlib::Xlib::open() else {
+        return None;
+    };
+    let disp = DISP.with(|d| {
+        if let Some(p) = d.get() {
+            return p;
+        }
+        let p = unsafe { (xlib.XOpenDisplay)(std::ptr::null()) };
+        d.set(Some(p));
+        p
+    });
+    if disp.is_null() {
+        return None;
+    }
+    unsafe {
+        let screen = (xlib.XDefaultScreen)(disp);
+        let root = (xlib.XRootWindow)(disp, screen);
+        let mut root_ret: xlib::Window = 0;
+        let mut child: xlib::Window = 0;
+        let mut rx: std::os::raw::c_int = 0;
+        let mut ry: std::os::raw::c_int = 0;
+        let mut wx: std::os::raw::c_int = 0;
+        let mut wy: std::os::raw::c_int = 0;
+        let mut mask: std::os::raw::c_uint = 0;
+        if (xlib.XQueryPointer)(
+            disp,
+            root,
+            &mut root_ret,
+            &mut child,
+            &mut rx,
+            &mut ry,
+            &mut wx,
+            &mut wy,
+            &mut mask,
+        ) == 0
+        {
+            return None;
+        }
+        Some((rx as f64, ry as f64))
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn global_cursor(scale: f32) -> Option<(f64, f64)> {
+    use std::ffi::CString;
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct NsPoint {
+        x: f64,
+        y: f64,
+    }
+    type MsgSendPoint = unsafe extern "C" fn(*mut c_void, *mut c_void) -> NsPoint;
+    unsafe {
+        let cls_name = CString::new("NSEvent").ok()?;
+        let sel_name = CString::new("mouseLocation").ok()?;
+        let cls = objc_getClass(cls_name.as_ptr());
+        let sel = sel_registerName(sel_name.as_ptr());
+        if cls.is_null() || sel.is_null() {
+            return None;
+        }
+        let msg: MsgSendPoint = std::mem::transmute(objc_msgSend as *const c_void);
+        let p = msg(cls, sel); // points, origin bottom-left
+        let s = f64::from(scale.max(0.5));
+        let h_px = CGDisplayPixelsHigh(CGMainDisplayID()) as f64;
+        // flip to top-left origin and convert points → physical pixels
+        Some((p.x * s, (h_px / s - p.y) * s))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+pub fn global_cursor(_scale: f32) -> Option<(f64, f64)> {
+    None
+}

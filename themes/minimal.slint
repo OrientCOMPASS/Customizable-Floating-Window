@@ -1,3 +1,4 @@
+// cfw-bundled: 2   (built-in theme revision; remove this line to freeze your own edits)
 // minimal.slint — 最小主题示例：一枚状态圆点（自定义主题的起点模板）
 //
 //   · 红 = 静音，蓝 = 串流（呼吸），灰 = 空闲；耳返开启时外圈绿环
@@ -95,10 +96,9 @@ export component MinimalDot inherits Window {
             } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
                 if (root.pressing) {
                     root.pressing = false;
+                    root.drag-end();
                     if (root.move-events < 2) {
                         root.mute-toggle();
-                    } else {
-                        root.drag-end();
                     }
                 }
             } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {

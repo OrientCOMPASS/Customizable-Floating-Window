@@ -188,7 +188,7 @@ mute_changed 等事件）、`control.intercept`（set_muted/set_monitoring）、
 抵消（`Δ_n = c_n − u_n`），两种自然解读分别退化为半步（增量式）或 `u = c/2`
 （绝对式）——正是用户实测的“一半距离 + 跳动”。
 
-**v2（当前）**：主题上报**窗内鼠标绝对坐标**：
+**v2**：主题上报**窗内鼠标绝对坐标**（曾用于 E2E 验证逐像素精确）：
 `drag-start(gx,gy)` = 按下时刻窗内坐标（抓取锚点 g）；
 `drag-move(mx,my)` = 移动中当前窗内坐标。helper 每事件一步收敛：
 
@@ -197,8 +197,24 @@ C = P_cur + m·scale        // 光标屏幕坐标 = 当前窗位 + 窗内坐标
 P_new = C − g·scale        // 锚点不变式：光标始终落在抓取点
 ```
 
-每事件绝对落位、无累积、无反馈环（E2E 实测：光标 Δ(−204,+234) →
-`windowX/Y = 968/258`，与推算逐像素一致）。
+每事件绝对落位、无累积、无反馈环（E2E 实测逐像素一致）。
+
+**v3（当前默认）**：helper 侧**全局光标跟踪**——彻底移除主题↔helper 的几何耦合：
+`drag-start` 时记录 `P0`（窗位）与 `C0`（全局光标，平台 FFI：Win `GetCursorPos` /
+X11 `XQueryPointer` / macOS `[NSEvent mouseLocation]`），8ms 定时器持续
+`P = P0 + (C − C0)`。全局坐标系与窗口位移无关 → 反馈环**结构性消失**（系统拖动
+同级 1:1 手感），且**不占用 WM 抓取**：客户端照常收到全部按钮事件，左键单击/右键
+耳返/点击阈值逻辑完全不受影响（E2E：拖动后 `windowX/Y = 968/258` 逐像素精确，
+随后单击正确触发 `set_muted`）。全局光标不可用（Wayland）时自动回退 v2 协议
+（主题仍发 `drag-move`）。`drag-end` 在点击与拖动两种抬起路径都调用以停跟踪器。
+
+**WindowMoveArea 与点击兼容性调研**：Slint 1.18 的 `WindowMoveArea` 语义即“原生
+标题栏”（CHANGELOG：*start an interactive window move, like a native title bar*，
+#613）——按下即发起系统拖动并吞掉该 press/release 对，与标题栏不产生 click 同构；
+Slint issue 追踪中同类“手势吞点击”问题见 #13118（Flickable 吞 plain click，仍未
+完全解决）。因此**没有**“WindowMoveArea 透传左右键”的官方方案；本插件的解法是
+v3 全局光标跟踪（不需要 WindowMoveArea 即获系统级手感），pill 等需要系统拖动的
+主题仍可用 WindowMoveArea（按钮置于其上层即可点击）。
 
 点击≠拖动改由**移动事件计数**判定：完美跟手下窗内坐标几乎不变，无法再用位移阈值；
 `moved` 回调 <2 次 = 单击（切静音），≥2 次 = 拖动（`drag-end` 上报位置持久化）。
@@ -250,6 +266,31 @@ show 后 150ms 起单shot 重试链（≤12 次，等窗口映射出句柄）：
 `Snapshot{path}` → `Window::take_snapshot()` → png crate 写 RGBA PNG
 （含 alpha）。`--selftest <prefix>` 无宿主合成三态快照；`--compile-check`
 输出契约报告（CI 与主题作者工具）。
+
+### 5.7 WDIS 语音转录接入（WhatdidIsay 广播）
+
+协议（WhatdidIsay README）：宿主消息总线广播二进制帧
+`b"WDIS" | start_ms i64 LE | end_ms i64 LE | UTF-8 text`，消费方仅校验 magic。
+本插件在 `handle_message` 入口**先于 topic 路由**做 magic 检查（广播 topic 不固定），
+解析后经 stdin 发 `Cmd::Wdis{text, hold_ms}` 给 helper（插件线程不做 UI），
+helper 在 UI 线程写入可选契约成员 `wdis-text`(string) / `wdis-visible`(bool) 并起
+`hold_ms` 单次定时器收回。主题侧动画：
+
+* **ring**：圆下方伸出**宽 = 直径**的文本框（`box-h` animate 260ms 伸出/收回，
+  `box-alpha` animate 420ms 渐变消失），窗口高度 `win + box-h` 向下生长（顶边锚定）；
+* **pill**：底部下伸面板（`box-h` animate 240ms），`height: 56px + box-h`；
+* 配置：`wdisEnabled`（默认开）、`wdisHoldMs`（默认 4000，1–30s），面板可调。
+
+验证：mock-host `MOCK_WDIS` 注入真实二进制帧 → 插件日志收帧 → helper 落属性 →
+快照 84×124 / 224×90（窗口确实长高）+ 合成预览图 `dist/shots/wdis-preview.png`。
+
+### 5.8 内置主题升级策略（cfw-bundled 标记）
+
+`themes/` 为用户可编辑目录，插件**绝不覆盖无标记文件**。内置主题首行带
+`// cfw-bundled: <rev>` 标记：init 时“缺失→写入；有标记且与内置不同→升级覆盖；
+无标记→视为用户财产保留”。用户若魔改内置主题需保留改动：删除标记行或另存新文件名
+（面板「恢复内置主题」可随时重置）。该策略源于实测：升级后旧副本若无策略将永远
+停留在旧契约（如缺 `wdis-visible`）。
 
 ## 6. 主题与 v1 移植
 
@@ -364,7 +405,7 @@ E2E 交互断言因此放在 ring（自定义拖动，不依赖 WM）；pill 的
 * CI 矩阵（按用户要求**不含 macOS x86_64**）：windows-latest(MSVC x64) /
   ubuntu-latest(x64) / macos-latest(arm64)；步骤：test → build → 主题 compile-check
   → 归一化 → package 组装**单一 plugin.zip**；tag 触发 Release；
-* **单一 manifest**：仓库根 `plugin.json` 同时是 zip 内安装清单、Release 资产
+* **单一 manifest**（Focus-Capture 模型）：仓库根 `plugin.json` 同时是 zip 内安装清单、Release 资产
   （`updateUrl` → `.../releases/latest/download/plugin.json`）与市场条目来源
   （Focus-Capture 分发模型）；`repository/homepage/readmeUrl` 指向
   `OrientCOMPASS/Customizable-Floating-Window`。

@@ -28,6 +28,9 @@ pub enum Cmd {
     PosDefault,
     /// Render the window to a PNG file (diagnostics / tests / docs).
     Snapshot { path: String },
+    /// WhatdidIsay (WDIS) transcription broadcast reached the plugin:
+    /// show `text` in the theme's transcript area for `hold_ms`.
+    Wdis { text: String, hold_ms: u64 },
     /// Clean shutdown.
     Quit,
 }

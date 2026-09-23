@@ -116,19 +116,6 @@
   </div>
 
   <div class="card">
-    <h3 id="hEdit">修改主题（推荐方式）</h3>
-    <div class="ai-tip">
-      <b id="aiTipTitle">优先使用 AI / LLM 修改主题。</b>
-      <span id="aiTipBody">.slint 是声明式 UI 语言：把目标主题文件与「主题契约」一起交给 AI 助手
-      （或直接用文本编辑器）修改，保存后回到本面板点「热重载当前主题」即可生效，无需重启。</span>
-    </div>
-    <div class="pathbox">
-      <span id="pathLabel">主题文件目录：</span><code id="themesDir">…</code>
-    </div>
-    <div class="hint" id="editHint"></div>
-  </div>
-
-  <div class="card">
     <h3 id="hTheme">切换主题（.slint）</h3>
     <div class="themes" id="themeList"></div>
     <div class="actions">
@@ -152,6 +139,14 @@
       <button id="btnLoadCur"></button>
     </div>
     <div class="hint" id="editorHint"></div>
+    <div class="ai-tip">
+      <b id="aiTipTitle">优先使用 AI / LLM 修改主题。</b>
+      <span id="aiTipBody">.slint 是声明式 UI 语言：把目标主题文件与下方「主题契约」一起交给 AI 助手（或直接用文本编辑器）修改，保存后点「热重载当前主题」即可生效，无需重启 MicYou。</span>
+      <div class="pathbox">
+        <span id="pathLabel">主题文件目录：</span><code id="themesDir">…</code>
+        <div id="editHint"></div>
+      </div>
+    </div>
     <details>
       <summary id="sumContract">主题契约（可用属性 / 回调）</summary>
       <pre id="contractPre"></pre>
@@ -168,6 +163,15 @@
       <label class="key" id="lblTick">刷新间隔</label>
       <input type="range" id="rngTick" min="50" max="1000" step="10" />
       <span id="vTick" style="min-width:52px;text-align:right;font-variant-numeric:tabular-nums"></span>
+    </div>
+    <div class="row switch">
+      <input type="checkbox" id="chkWdis" />
+      <label for="chkWdis" id="lblWdis" style="min-width:0">显示 WDIS 语音转录（WhatdidIsay 广播）</label>
+    </div>
+    <div class="row">
+      <label class="key" id="lblWdisHold">转录保持</label>
+      <input type="range" id="rngWdisHold" min="1000" max="30000" step="500" />
+      <span id="vWdisHold" style="min-width:52px;text-align:right;font-variant-numeric:tabular-nums"></span>
     </div>
   </div>
 
@@ -196,7 +200,6 @@ const STR = {
     title: '可自定义悬浮窗', sub: 'Slint 主题驱动的透明悬浮窗 · 状态监视与静音/耳返控制',
     show: '显示', hide: '隐藏', restart: '重启悬浮窗', apply: '应用所选主题',
     reload: '热重载当前主题', restore: '恢复内置主题', resetPos: '位置复位',
-    hEdit: '修改主题（推荐方式）',
     aiTipTitle: '优先使用 AI / LLM 修改主题。',
     aiTipBody: '.slint 是声明式 UI 语言：把目标主题文件与下方「主题契约」一起交给 AI 助手（或直接用文本编辑器）修改，保存后点「热重载当前主题」即可生效，无需重启 MicYou。',
     pathLabel: '主题文件目录：',
@@ -218,7 +221,6 @@ const STR = {
     title: 'Customizable Floating Window', sub: 'Slint-themed transparent HUD · status monitoring + mute/monitoring control',
     show: 'Show', hide: 'Hide', restart: 'Restart', apply: 'Apply selected',
     reload: 'Hot-reload theme', restore: 'Restore built-ins', resetPos: 'Reset position',
-    hEdit: 'Editing themes (recommended)',
     aiTipTitle: 'Prefer an AI / LLM for theme edits.',
     aiTipBody: '.slint is a declarative UI language: hand the theme file plus the contract below to your AI assistant (or edit it in any text editor), save, then press “Hot-reload theme” — no restart needed.',
     pathLabel: 'Theme directory: ',
@@ -328,6 +330,10 @@ function renderStatus() {
   eb.style.display = err ? 'block' : 'none';
   eb.textContent = err ? t('errTitle') + err : '';
   $('chkVisible').checked = !!cfg.visible;
+  $('chkWdis').checked = cfg.wdisEnabled !== false;
+  const hold = cfg.wdisHoldMs ?? 4000;
+  $('rngWdisHold').value = hold;
+  $('vWdisHold').textContent = (hold / 1000).toFixed(1) + ' s';
   const ms = cfg.updateMs ?? 100;
   $('rngTick').value = ms;
   $('vTick').textContent = ms + ' ms';
@@ -344,6 +350,7 @@ function applyLocale() {
     ['hTheme','hTheme'],['hEditor','hEditor'],['hOpts','hOpts'],
     ['kName','kName'],['btnSave','save'],['btnLoadCur','loadCur'],
     ['lblVisible','lblVisible'],['lblTick','lblTick'],
+    ['lblWdis','lblWdis'],['lblWdisHold','lblWdisHold'],
     ['kStream','kStream'],['kLevel','kLevel'],['kMute','kMute'],['kMon','kMon'],
     ['kSession','kSession'],['kDev','kDev'],['kFmt','kFmt'],
     ['themeHint','themeHint'],['editorHint','editorHint'],['sumContract','sumContract'],
@@ -418,6 +425,15 @@ async function main() {
     refresh();
   };
   $('rngTick').oninput = (e) => { $('vTick').textContent = e.target.value + ' ms'; };
+  $('chkWdis').onchange = async (e) => {
+    await call('set_config', { key: 'wdisEnabled', value: e.target.checked });
+    refresh();
+  };
+  $('rngWdisHold').oninput = (e) => { $('vWdisHold').textContent = (e.target.value / 1000).toFixed(1) + ' s'; };
+  $('rngWdisHold').onchange = async (e) => {
+    await call('set_config', { key: 'wdisHoldMs', value: Number(e.target.value) });
+    refresh();
+  };
   $('rngTick').onchange = async (e) => {
     await call('set_config', { key: 'updateMs', value: Number(e.target.value) });
     refresh();
