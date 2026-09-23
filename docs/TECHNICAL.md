@@ -151,6 +151,11 @@ mute_changed 等事件）、`control.intercept`（set_muted/set_monitoring）、
 面板桥动作（topic `ui:<action>`）：`apply-theme` `reload` `restart-helper`
 `show` `hide` `reset-pos` `save-theme` `stage-theme` `restore-themes` `snapshot` `log`。
 
+第二轮实测反馈的面板整改：flex 行改为 `flex-wrap` + 提示独立成行（修复按钮/提示被
+挤成竖排）；新增「修改主题（推荐方式）」卡片：**优先建议用 AI/LLM 或直接编辑文件**
+修改主题，并展示插件 init 时写入的 `themesDir` 配置键（主题目录绝对路径）；
+在线编辑器降级标注为「仅快速微调」。
+
 ### 4.6 panic 与错误边界
 
 所有 FFI 入口 `catch_unwind(AssertUnwindSafe)` → `MPL_ERR_RUNTIME`；
@@ -176,14 +181,48 @@ mute_changed 等事件）、`control.intercept`（set_muted/set_monitoring）、
 * 1s UI Timer：位置轮询（`WindowMoveArea` 系统拖动/WM 移动的唯一感知途径；
   自定义拖动期间抑制；Wayland  dummy (0,0) 过滤）。
 
-### 5.3 自定义拖动协议（点击≠拖动）
+### 5.3 自定义拖动协议 v2（点击≠拖动，1:1 跟手）
 
-`.slint` 侧：`down → drag-start()`；`moved → drag-move(Δ逻辑px)`；
-`up` 且 `max-move<4px → mute-toggle()`，否则 `drag-end()`。
-helper 侧：`drag-start` 记录 `window().position()`+`scale_factor`；
-`drag-move` → `set_position(base + Δ·scale)`（物理像素）；`drag-end` →
-`Ev::Moved` 持久化。Wayland（`set_position` 不可用）自动降级为 no-op，
-主题可改用 `WindowMoveArea`（pill 即如此）。
+**v1 协议的反馈环缺陷（实测：移动量≈光标一半 + 跳动）**：主题上报“鼠标相对窗口
+坐标 Δ”，helper 用 `P = P0 + Δ` 落位。但窗口一旦移动，相对坐标本身会被窗口位移
+抵消（`Δ_n = c_n − u_n`），两种自然解读分别退化为半步（增量式）或 `u = c/2`
+（绝对式）——正是用户实测的“一半距离 + 跳动”。
+
+**v2（当前）**：主题上报**窗内鼠标绝对坐标**：
+`drag-start(gx,gy)` = 按下时刻窗内坐标（抓取锚点 g）；
+`drag-move(mx,my)` = 移动中当前窗内坐标。helper 每事件一步收敛：
+
+```text
+C = P_cur + m·scale        // 光标屏幕坐标 = 当前窗位 + 窗内坐标
+P_new = C − g·scale        // 锚点不变式：光标始终落在抓取点
+```
+
+每事件绝对落位、无累积、无反馈环（E2E 实测：光标 Δ(−204,+234) →
+`windowX/Y = 968/258`，与推算逐像素一致）。
+
+点击≠拖动改由**移动事件计数**判定：完美跟手下窗内坐标几乎不变，无法再用位移阈值；
+`moved` 回调 <2 次 = 单击（切静音），≥2 次 = 拖动（`drag-end` 上报位置持久化）。
+xdotool 一次性 warp（无中间 motion）正确判为点击，分步 motion 正确判为拖动。
+
+### 5.4 “不占任务栏”与窗口标志：创建期 + 创建后双保险
+
+Slint/winit 在**窗口创建期**读取 window item（X11 实测 depth=32 ARGB +
+SKIP_TASKBAR 在位，证明解释器绑定先于创建求值）。但真实桌面仍有个别路径失效
+（Windows 任务栏按钮在 show 时创建、之后改 `WS_EX_TOOLWINDOW` 不生效；macOS winit
+初始化 NSApp 时把激活策略重置为 Regular）。故 helper 在 show 后的重试链里做
+**幂等后处理**：
+
+* **Windows**：① `GWL_STYLE` 剥 `WS_CAPTION|WS_THICKFRAME|WS_SYSMENU|MIN/MAXBOX`
+  （防御性去框）；② `WS_EX_TOOLWINDOW`；③ **hide→show(SW_SHOWNOACTIVATE) 一次**
+  （仅当 exstyle 实际变化时；任务栏按钮只在 hide/show 后重建——启动期一次眨眼换
+  永久消失）；④ `DwmEnableBlurBehindWindow`(空区域) 保证逐像素透明（与 winit
+  `with_transparent` 同机制，幂等）。
+* **X11**：`_NET_WM_STATE_SKIP_TASKBAR/SKIP_PAGER` 追加 + `_MOTIF_WM_HINTS`
+  decorations=0（个别 CJK 桌面壳加 CSD 的兜底）。
+* **macOS**：NSWindow `setStyleMask:0`(borderless) + `setOpaque:NO` +
+  `backgroundColor=clearColor` + `setHasShadow:NO`；激活策略 Accessory 在
+  show 后 **10×500ms 重复断言**，压过 winit 的 Regular 重置。
+* **Wayland**：无客户端协议，no-op + 日志（合成器策略）。
 
 ### 5.4 “不占任务栏”平台后处理（Slint 无此能力）
 
@@ -233,14 +272,17 @@ drag-start() drag-move(float,float) drag-end()`
 | 中心辉光 ∝ level | 圆 `d=28px·lvl`，alpha ∝ lvl |
 | 静音斜杠 | 静态对角 `Path "M 33 33 L 67 67"`（软件渲染器无旋转，§7.1） |
 | 空闲淡环+中心小圆 | 同 |
-| MouseAdapter：5px 阈值拖动/点击切静音 | TouchArea 4px 阈值 + drag 三回调（§5.3） |
-| —（v1 无菜单） | 右键 `ContextMenuArea`（静音/耳返/隐藏/重载） |
+| MouseAdapter：5px 阈值拖动/点击切静音 | TouchArea 移动事件计数 + drag v2 三回调（§5.3） |
+| —（v1 无菜单） | **右键 = 切换耳返**（用户实测反馈定稿；ring 不再挂右键菜单） |
+| — | 耳返开启时外圈绿色细环提示（`monitoring` 属性） |
 
 ### 6.3 `pill.slint` / `minimal.slint`
 
 pill：224×56 半透明信息条——状态点（串流呼吸）、电平条（`animate width`）、
-`session-text`+设备/格式文本、MIC/MON 按钮、`WindowMoveArea` 系统拖动、右键原生菜单。
-minimal：30px 圆点最小契约示例（自定义主题起点模板）。
+`session-text`+设备/格式文本、MIC/MON 按钮、`WindowMoveArea` 系统拖动（Wayland
+推荐范式）、右键原生 `ContextMenuArea` 菜单。
+minimal：34px 圆点最小契约示例（自定义主题起点模板），交互与 ring 一致
+（左键静音/拖动移窗/右键耳返）。
 
 ## 7. 关键技术发现与决策记录
 
@@ -270,7 +312,19 @@ show 后重试链内**再断言一次** Accessory（§5.4）。
 宿主 disable 插件后其 interval 线程可能仍投 tick（按插件 id 路由）。
 双重过滤：payload 标签 `cfw` + `interval id == self.interval_id`，陈旧 tick 直接丢弃。
 
-### 7.5 Xvfb 无 WM 的系统拖动
+### 7.5 拖动反馈环（v1 协议半步 + 跳动）
+
+见 §5.3：相对坐标增量在被移动窗口里自抵消，任何“base+Δ”式落位都半步/跳动。
+v2 改窗内绝对坐标 + 锚点不变式后逐像素精确（E2E 968/258）。
+
+### 7.6 Windows 任务栏按钮生命周期
+
+任务栏按钮于窗口 show 时创建；事后改 `WS_EX_TOOLWINDOW` 只影响 Alt-Tab/样式，
+**按钮不消失**，必须 hide/show 一次。启动期单次 SW_HIDE→SW_SHOWNOACTIVATE
+（仅 exstyle 真变化时）为最小代价解。macOS 侧对应问题是 winit 在事件循环初始化时
+重置激活策略 → 重复断言 Accessory。
+
+### 7.7 Xvfb 无 WM 的系统拖动
 
 `WindowMoveArea` 依赖 EWMH `_NET_WM_MOVERESIZE`，裸 Xvfb 无 WM → no-op。
 E2E 交互断言因此放在 ring（自定义拖动，不依赖 WM）；pill 的 WindowMoveArea
@@ -307,10 +361,13 @@ E2E 交互断言因此放在 ring（自定义拖动，不依赖 WM）；pill 的
 
 * 单 zip 跨平台（沿用 Focus-Capture 模式）：三 cdylib 同名去 `lib` 前缀
   （宿主按平台补后缀）+ `bin/floating-helper-{os}-{arch}[.exe]` + 清单/面板/主题；
-* CI 矩阵：windows-latest(MSVC) / ubuntu-latest(+libfontconfig1-dev 等) /
-  macos-latest(arm64+x86_64)；步骤：test → build → 归一化 → zip → artifact；
-  tag 触发 Release（plugin.zip + plugin.json 快照）；
-* `updateUrl/readmeUrl` 留空（未绑定发布仓库时不写死链接）。
+* CI 矩阵（按用户要求**不含 macOS x86_64**）：windows-latest(MSVC x64) /
+  ubuntu-latest(x64) / macos-latest(arm64)；步骤：test → build → 主题 compile-check
+  → 归一化 → package 组装**单一 plugin.zip**；tag 触发 Release；
+* **单一 manifest**：仓库根 `plugin.json` 同时是 zip 内安装清单、Release 资产
+  （`updateUrl` → `.../releases/latest/download/plugin.json`）与市场条目来源
+  （Focus-Capture 分发模型）；`repository/homepage/readmeUrl` 指向
+  `OrientCOMPASS/Customizable-Floating-Window`。
 
 > 内存说明：release profile（`codegen-units=1` + LTO）在 ≤1 GB 内存的容器里
 > 编译 `x11rb-protocol` 会被 OOM-kill（与本插件代码无关）。本地小内存环境用

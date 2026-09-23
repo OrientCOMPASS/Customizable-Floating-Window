@@ -30,8 +30,9 @@ pub fn apply_skip_taskbar(window: &Window) -> &'static str {
     return linux_skip_taskbar(window);
     #[cfg(target_os = "macos")]
     {
-        let _ = window; // policy is process-wide, applied in main()/retry chain
-        return "macos-accessory-policy";
+        macos_harden_window(window);
+        macos_set_accessory_policy();
+        return "macos-accessory+borderless";
     }
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
@@ -137,21 +138,89 @@ pub fn macos_set_accessory_policy() {
 #[cfg(not(target_os = "macos"))]
 pub fn macos_set_accessory_policy() {}
 
+/// macOS: force the NSWindow borderless + non-opaque + clear background.
+/// Slint/winit normally honors `no-frame`/`background: transparent` at window
+/// creation; this is the idempotent post-creation guarantee (and rescues the
+/// case where the window item bindings land one tick late).
+#[cfg(target_os = "macos")]
+fn macos_harden_window(window: &Window) {
+    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    use std::ffi::CString;
+    let slint_handle = window.window_handle();
+    let Ok(wh) = slint_handle.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(h) = wh.as_raw() else {
+        return;
+    };
+    unsafe {
+        let sel = |n: &str| {
+            CString::new(n)
+                .map(|c| sel_registerName(c.as_ptr()))
+                .unwrap_or(std::ptr::null_mut())
+        };
+        let cls = |n: &str| {
+            CString::new(n)
+                .map(|c| objc_getClass(c.as_ptr()))
+                .unwrap_or(std::ptr::null_mut())
+        };
+        let msg0: MsgSend0 = std::mem::transmute(objc_msgSend as *const c_void);
+        let msg1: MsgSendI = std::mem::transmute(objc_msgSend as *const c_void);
+        type MsgSendP = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void);
+        let msgp: MsgSendP = std::mem::transmute(objc_msgSend as *const c_void);
+        let view = h.ns_view.as_ptr();
+        let nswin = msg0(view, sel("window"));
+        if nswin.is_null() {
+            return;
+        }
+        // styleMask = NSWindowStyleMaskBorderless (0)
+        msg1(nswin, sel("setStyleMask:"), 0);
+        // opaque = NO, backgroundColor = clearColor, no shadow
+        msg1(nswin, sel("setOpaque:"), 0);
+        let color_cls = cls("NSColor");
+        if !color_cls.is_null() {
+            let clear = msg0(color_cls, sel("clearColor"));
+            if !clear.is_null() {
+                msgp(nswin, sel("setBackgroundColor:"), clear);
+            }
+        }
+        msg1(nswin, sel("setHasShadow:"), 0);
+    }
+}
+
 // ─────────────────────────── Windows ───────────────────────────
 
 #[cfg(windows)]
 mod win {
     use std::ffi::c_void;
     pub type HWND = *mut c_void;
+    pub const GWL_STYLE: i32 = -16;
     pub const GWL_EXSTYLE: i32 = -20;
+    pub const WS_CAPTION: isize = 0x00C0_0000;
+    pub const WS_THICKFRAME: isize = 0x0004_0000;
+    pub const WS_SYSMENU: isize = 0x0008_0000;
+    pub const WS_MINIMIZEBOX: isize = 0x0002_0000;
+    pub const WS_MAXIMIZEBOX: isize = 0x0001_0000;
     pub const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
     pub const SWP_NOSIZE: u32 = 0x0001;
     pub const SWP_NOMOVE: u32 = 0x0002;
     pub const SWP_NOZORDER: u32 = 0x0004;
     pub const SWP_NOACTIVATE: u32 = 0x0010;
     pub const SWP_FRAMECHANGED: u32 = 0x0020;
+    pub const SW_HIDE: i32 = 0;
+    pub const SW_SHOWNOACTIVATE: i32 = 4;
     pub const SM_CXSCREEN: i32 = 0;
     pub const SM_CYSCREEN: i32 = 1;
+
+    #[repr(C)]
+    pub struct DWM_BLURBEHIND {
+        pub dw_flags: u32,
+        pub f_enable: i32,
+        pub h_rgn_blur: *mut c_void,
+        pub f_transition_on_maximized: i32,
+    }
+    pub const DWM_BB_ENABLE: u32 = 0x0001;
+    pub const DWM_BB_BLURREGION: u32 = 0x0002;
 
     #[link(name = "user32")]
     extern "system" {
@@ -167,6 +236,12 @@ mod win {
             flags: u32,
         ) -> i32;
         pub fn GetSystemMetrics(index: i32) -> i32;
+        pub fn ShowWindow(hwnd: HWND, cmd: i32) -> i32;
+        pub fn CreateRectRgn(x1: i32, y1: i32, x2: i32, y2: i32) -> *mut c_void;
+    }
+    #[link(name = "dwmapi")]
+    extern "system" {
+        pub fn DwmEnableBlurBehindWindow(hwnd: HWND, bb: *const DWM_BLURBEHIND) -> i32;
     }
 }
 
@@ -185,8 +260,26 @@ fn windows_skip_taskbar(window: &Window) -> &'static str {
     };
     unsafe {
         let hwnd = h.hwnd.get() as win::HWND;
+
+        // 1) frameless, defensively (in case the winit decoration change
+        //    did not land): strip caption/frame/system-menu/boxes.
+        let style = win::GetWindowLongPtrW(hwnd, win::GWL_STYLE);
+        let style_stripped = style
+            & !(win::WS_CAPTION
+                | win::WS_THICKFRAME
+                | win::WS_SYSMENU
+                | win::WS_MINIMIZEBOX
+                | win::WS_MAXIMIZEBOX);
+        if style_stripped != style {
+            win::SetWindowLongPtrW(hwnd, win::GWL_STYLE, style_stripped);
+        }
+
+        // 2) tool window (no taskbar button / no alt-tab entry).
         let ex = win::GetWindowLongPtrW(hwnd, win::GWL_EXSTYLE);
-        win::SetWindowLongPtrW(hwnd, win::GWL_EXSTYLE, ex | win::WS_EX_TOOLWINDOW);
+        let ex_new = ex | win::WS_EX_TOOLWINDOW;
+        if ex_new != ex {
+            win::SetWindowLongPtrW(hwnd, win::GWL_EXSTYLE, ex_new);
+        }
         win::SetWindowPos(
             hwnd,
             std::ptr::null_mut(),
@@ -200,8 +293,29 @@ fn windows_skip_taskbar(window: &Window) -> &'static str {
                 | win::SWP_NOACTIVATE
                 | win::SWP_FRAMECHANGED,
         );
+
+        // 3) The taskbar button is created when the window first shows;
+        //    changing WS_EX_TOOLWINDOW afterwards only takes effect after a
+        //    hide/show cycle. One deliberate blink at startup beats a
+        //    permanent taskbar entry.
+        if ex_new != ex {
+            win::ShowWindow(hwnd, win::SW_HIDE);
+            win::ShowWindow(hwnd, win::SW_SHOWNOACTIVATE);
+        }
+
+        // 4) Per-pixel transparency, same mechanism winit uses for
+        //    `with_transparent(true)` on Windows: DWM blur-behind with an
+        //    empty region. Idempotent — a no-op when already transparent.
+        let rgn = win::CreateRectRgn(0, 0, 0, 0); // empty region => fully transparent
+        let bb = win::DWM_BLURBEHIND {
+            dw_flags: win::DWM_BB_ENABLE | win::DWM_BB_BLURREGION,
+            f_enable: 1,
+            h_rgn_blur: rgn,
+            f_transition_on_maximized: 0,
+        };
+        win::DwmEnableBlurBehindWindow(hwnd, &bb);
     }
-    "ws_ex_toolwindow"
+    "ws_ex_toolwindow+dwm"
 }
 
 // ─────────────────────────── macOS ─────────────────────────────
@@ -326,6 +440,37 @@ fn linux_skip_taskbar(window: &Window) -> &'static str {
             atoms.as_ptr() as *const std::os::raw::c_uchar,
             atoms.len() as std::os::raw::c_int,
         );
+
+        // Belt & suspenders for WMs that add frames/CSDs anyway (some CJK
+        // desktop shells): MOTIF_WM_HINTS with decorations = 0.
+        let motif = intern(&xlib, disp, b"_MOTIF_WM_HINTS\0");
+        if motif != 0 {
+            #[repr(C)]
+            struct MotifHints {
+                flags: u64,
+                functions: u64,
+                decorations: u64,
+                input_mode: i64,
+                status: u64,
+            }
+            let hints = MotifHints {
+                flags: 1 << 1, // MWM_HINTS_DECORATIONS
+                functions: 0,
+                decorations: 0,
+                input_mode: 0,
+                status: 0,
+            };
+            (xlib.XChangeProperty)(
+                disp,
+                win_id,
+                motif,
+                motif,
+                32,
+                0,
+                &hints as *const MotifHints as *const std::os::raw::c_uchar,
+                5,
+            );
+        }
         (xlib.XFlush)(disp);
         (xlib.XCloseDisplay)(disp);
     }

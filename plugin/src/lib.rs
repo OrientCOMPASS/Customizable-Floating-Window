@@ -772,6 +772,12 @@ pub unsafe extern "C" fn micyou_plugin_init(host: *const mpl_host_api_t) -> mpl_
         core.muted = abi::get_muted().unwrap_or(false);
 
         core.publish_theme_list(true);
+        {
+            let dir_json =
+                serde_json::to_string(&core.themes_dir.display().to_string())
+                    .unwrap_or_else(|_| "\"\"".into());
+            core.set_cfg_key("themesDir", &dir_json);
+        }
         abi::set_panel_icon(PANEL_ID, "🪟");
 
         if core.cfg.visible {

@@ -1,8 +1,9 @@
-// minimal.slint — 最小主题示例：一枚状态圆点（约 40 行，展示最小可用契约）
+// minimal.slint — 最小主题示例：一枚状态圆点（自定义主题的起点模板）
 //
-//   · 红 = 静音，蓝 = 串流（呼吸），灰 = 空闲
-//   · 单击切换静音；拖动移动窗口；无菜单
-// 适合作为自定义主题的起点模板。
+//   · 红 = 静音，蓝 = 串流（呼吸），灰 = 空闲；耳返开启时外圈绿环
+//   · 左键单击切换静音；左键拖动移窗（drag v2 协议）；右键切换耳返
+//
+// 契约成员全部可选 —— 本文件只演示最小子集 + 交互三件套。
 
 export component MinimalDot inherits Window {
     // 最小数据契约
@@ -10,11 +11,13 @@ export component MinimalDot inherits Window {
     in property <float> smooth-level: 0;
     in property <bool> muted: false;
     in property <bool> streaming: false;
+    in property <bool> monitoring: false;
     in property <string> session-text: "";
 
     // 最小交互契约
     callback mute-toggle();
-    callback drag-start();
+    callback monitoring-toggle();
+    callback drag-start(float, float);
     callback drag-move(float, float);
     callback drag-end();
 
@@ -27,12 +30,13 @@ export component MinimalDot inherits Window {
     in property <color> accent: #4ea1ff;
     in property <color> error: #ff5a5a;
     in property <color> idle: #9aa0a6;
+    in property <color> mon: #3ddc84;
 
     property <color> content: muted ? error : (streaming ? accent : idle);
     property <float> lvl: min(1, max(0, smooth-level));
-    property <float> breath: 1;
-    property <length> max-move: 0px;
+    property <int> move-events: 0;
     property <bool> pressing: false;
+    property <float> breath: 1;
 
     Timer {
         interval: 800ms;
@@ -40,7 +44,17 @@ export component MinimalDot inherits Window {
         triggered => { root.breath = root.breath == 1 ? 0.55 : 1; }
     }
 
-    // 外圈：静音斜杠提示 / 串流呼吸
+    // 耳返提示外环
+    Rectangle {
+        width: 100%; height: 100%;
+        border-radius: root.width / 2;
+        background: transparent;
+        border-width: 1.5px;
+        border-color: root.mon.with-alpha(0.85);
+        opacity: root.monitoring ? 1 : 0;
+    }
+
+    // 外圈：状态环（串流时呼吸）
     Rectangle {
         width: 100%; height: 100%;
         border-radius: root.width / 2;
@@ -70,30 +84,33 @@ export component MinimalDot inherits Window {
         }
     }
 
+    // 交互层：左键单击静音 / 拖动移窗 / 右键耳返
     TouchArea {
         mouse-cursor: pointer;
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
                 root.pressing = true;
-                root.max-move = 0px;
-                root.drag-start();
+                root.move-events = 0;
+                root.drag-start(self.mouse-x / 1px, self.mouse-y / 1px);
             } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
                 if (root.pressing) {
                     root.pressing = false;
-                    if (root.max-move < 4px) {
+                    if (root.move-events < 2) {
                         root.mute-toggle();
                     } else {
                         root.drag-end();
                     }
                 }
+            } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                root.monitoring-toggle();
+            } else if (e.kind == PointerEventKind.cancel) {
+                root.pressing = false;
             }
         }
         moved => {
             if (root.pressing) {
-                root.max-move = max(root.max-move,
-                    max(abs(self.mouse-x - self.pressed-x), abs(self.mouse-y - self.pressed-y)));
-                root.drag-move((self.mouse-x - self.pressed-x) / 1px,
-                               (self.mouse-y - self.pressed-y) / 1px);
+                root.move-events += 1;
+                root.drag-move(self.mouse-x / 1px, self.mouse-y / 1px);
             }
         }
     }

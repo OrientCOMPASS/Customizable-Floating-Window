@@ -50,9 +50,10 @@ struct Ui {
     /// Wave-bar animation phase (degrees), advanced by the smoothing timer.
     phase: f64,
     dragging: bool,
-    drag_base: Option<PhysicalPosition>,
+    /// Grab offset inside the window (logical px), from `drag-start`.
+    drag_grab: Option<(f64, f64)>,
     drag_scale: f32,
-    drag_moved: f64,
+    drag_events: u32,
     last_pos: Option<PhysicalPosition>,
 }
 
@@ -65,9 +66,9 @@ impl Ui {
             last_applied_smooth: f64::NAN,
             phase: 0.0,
             dragging: false,
-            drag_base: None,
+            drag_grab: None,
             drag_scale: 1.0,
-            drag_moved: 0.0,
+            drag_events: 0,
             last_pos: None,
         }
     }
@@ -306,7 +307,8 @@ fn activate_theme(theme: LoadedTheme, shared: Arc<Shared>, reloaded: bool) {
         u.smooth = 0.0;
         u.last_applied_smooth = f64::NAN;
         u.dragging = false;
-        u.drag_base = None;
+        u.drag_grab = None;
+        u.drag_events = 0;
         u.last_pos = None;
     });
 
@@ -497,63 +499,76 @@ fn attach_callbacks(theme: &LoadedTheme) {
         });
     }
     if has(theme::CB_DRAG_START) {
-        let _ = inst.set_callback(theme::CB_DRAG_START, |_| {
-            let pos_scale = if platform::position_api_usable() {
-                with_window(|w| (w.position(), w.scale_factor()))
-            } else {
-                None
+        // v2 protocol: args = mouse position inside the window (logical px)
+        // at press time — the grab anchor `g`.
+        let _ = inst.set_callback(theme::CB_DRAG_START, |args| {
+            let g = match (args.first(), args.get(1)) {
+                (Some(Value::Number(a)), Some(Value::Number(b))) => Some((*a, *b)),
+                _ => None,
             };
+            let scale = with_window(|w| w.scale_factor()).unwrap_or(1.0);
             UI.with(|u| {
                 let mut u = u.borrow_mut();
-                u.drag_moved = 0.0;
+                u.drag_events = 0;
                 u.dragging = true;
-                match pos_scale {
-                    Some((p, s)) => {
-                        u.drag_base = Some(p);
-                        u.drag_scale = s;
-                    }
-                    None => u.drag_base = None,
-                }
+                u.drag_grab = g;
+                u.drag_scale = scale;
             });
             Value::Void
         });
     }
     if has(theme::CB_DRAG_MOVE) {
+        // v2 protocol: args = CURRENT mouse position inside the (moving)
+        // window, logical px. Cursor screen pos C = P_cur + m*scale; the
+        // window must sit at P = C - g*scale. Absolute per event → no
+        // feedback loop, no drift, 1:1 tracking.
         let _ = inst.set_callback(theme::CB_DRAG_MOVE, |args| {
-            let (dx, dy) = match (args.first(), args.get(1)) {
+            let (mx, my) = match (args.first(), args.get(1)) {
                 (Some(Value::Number(a)), Some(Value::Number(b))) => (*a, *b),
-                _ => (0.0, 0.0),
+                _ => return Value::Void,
             };
-            let (dragging, base, scale, prev) = UI.with(|u| {
+            let (dragging, grab, scale) = UI.with(|u| {
                 let u = u.borrow();
-                (u.dragging, u.drag_base, u.drag_scale, u.drag_moved)
+                (u.dragging, u.drag_grab, u.drag_scale)
             });
             if !dragging {
                 return Value::Void;
             }
-            if let Some(b) = base {
-                let s = f64::from(scale.max(0.5));
-                let _ = with_window(|w| {
-                    w.set_position(PhysicalPosition::new(
-                        b.x + (f64::from(dx) * s).round() as i32,
-                        b.y + (f64::from(dy) * s).round() as i32,
-                    ))
-                });
+            UI.with(|u| u.borrow_mut().drag_events += 1);
+            if !platform::position_api_usable() {
+                return Value::Void;
             }
-            UI.with(|u| u.borrow_mut().drag_moved = prev.max(dx.abs()).max(dy.abs()));
+            let Some((gx, gy)) = grab else { return Value::Void };
+            let s = f64::from(scale.max(0.5));
+            let _ = with_window(|w| {
+                let p = w.position();
+                let cx = p.x as f64 + mx * s;
+                let cy = p.y as f64 + my * s;
+                let nx = (cx - gx * s).round() as i32;
+                let ny = (cy - gy * s).round() as i32;
+                if std::env::var_os("CFW_DEBUG_DRAG").is_some() {
+                    eprintln!(
+                        "[drag] m=({mx:.0},{my:.0}) g=({gx:.0},{gy:.0}) s={s} P_cur=({},{}) -> P_new=({nx},{ny})",
+                        p.x, p.y
+                    );
+                }
+                w.set_position(PhysicalPosition::new(nx, ny))
+            });
             Value::Void
         });
     }
     if has(theme::CB_DRAG_END) {
         let _ = inst.set_callback(theme::CB_DRAG_END, |_| {
-            let moved = UI.with(|u| {
+            let events = UI.with(|u| {
                 let mut u = u.borrow_mut();
-                let m = u.drag_moved;
+                let n = u.drag_events;
                 u.dragging = false;
-                u.drag_base = None;
-                m
+                u.drag_grab = None;
+                n
             });
-            if moved > 2.0 && platform::position_api_usable() {
+            // only persist when an actual drag happened (theme decides
+            // click-vs-drag itself; >=2 move events == real drag)
+            if events >= 2 && platform::position_api_usable() {
                 if let Some(p) = with_window(|w| w.position()) {
                     if !(p.x == 0 && p.y == 0) {
                         UI.with(|u| u.borrow_mut().last_pos = Some(p));
