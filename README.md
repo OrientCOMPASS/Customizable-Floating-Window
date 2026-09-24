@@ -6,16 +6,15 @@
 置顶、**不占任务栏**的悬浮窗：实时展示 `audio.state` 数据与**本次连接时长**，
 左键单击切静音、拖动移窗、右键菜单——全部交互在 `.slint` 主题内定义。
 
-| | |
-|---|---|
-| 插件 id | `opss.customizable-floating-window` |
-| 运行时 | Native（cdylib，C ABI v1 / Host API v2）+ 独立 Slint helper 子进程 |
-| 平台 | Windows 10+ (x86_64) · Linux X11/Wayland (x86_64) · macOS 11+ (arm64/x86_64) |
-| 插件类型 | `ui`（不进 DSP 链，不碰音频数据） |
-| 权限 | `audio.state` `control.observe` `control.intercept` `config.read` `config.write`（最小化） |
-| 许可 | Unlicense（公有领域） |
-
-![themes](dist/shots/themes-sheet.png)
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/9eeae28e-4207-4b7c-b32f-7af50220d72a" 
+         width="200" 
+         autoplay 
+         loop 
+         muted 
+         playsinline>
+  </video>
+</div>
 *三个内置主题 × 三种状态（串流 / 静音 / 空闲），透明背景合成于深色桌面预览。*
 
 ## 安装
@@ -44,7 +43,7 @@ opss.customizable-floating-window/
 
 ## 使用
 
-* **左键单击**悬浮窗 = 切换宿主静音（未拖动阈值 4px，与 v1 一致）；
+* **左键单击**悬浮窗 = 切换宿主静音（未拖动阈值 4px）；
 * **左键拖动** = 移动窗口（位置自动持久化，重启恢复）；
 * **右键** = 上下文菜单（静音 / 耳返 / 隐藏 / 重载主题）；
 * **设置面板**（设置 → 插件 → 「悬浮窗设置」）：
@@ -107,4 +106,4 @@ tools/mock-host --plugin target/release/libcustomizable_floating_window.so \
 
 ## 许可
 
-Unlicense — 见 [LICENSE](LICENSE)。
+GPLv3 — 见 [LICENSE](LICENSE)。
