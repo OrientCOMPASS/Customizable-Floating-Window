@@ -411,3 +411,61 @@ deinit 干净；`x86_64-pc-windows-gnu` 交叉构建通过；actionlint 零告�
   `code/pre` 增加 `overflow-wrap: anywhere`；「优先使用 AI/LLM 修改主题」说明块
   （含主题目录路径）置于编辑器卡片内、主题契约折叠区上一行；中英本地化键补齐
   （aiTipTitle/aiTipBody/pathLabel/editHint/lblWdis/lblWdisHold/wdisExplain）。
+
+---
+
+## 13. Round-9：Windows 任务栏问题根因与最终修复（逐条说明）
+
+### 13.1 证据链（社区讨论 + winit 源码）
+
+1. **slint-ui/slint discussion #3266**（"How to hide the window in the taskbar?"）：
+   提问者与我们的旧做法完全相同——show 之后 `SetWindowLongPtr(GWL_EXSTYLE, WS_EX_TOOLWINDOW)`，
+   结果**任务栏按钮不消失**（"I failed to hide my window in the taskbar… or the window
+   flag is changed somewhere else"）；维护者 tronical/ogoffart 确认：Slint 无开箱 API，
+   只能经 `i-slint-backend-winit` 私有路径碰 winit。
+2. **winit 0.30 源码** `platform_impl/windows/window.rs`：winit 自己的
+   `set_skip_taskbar()` **不改扩展样式**，而是 COM 接口
+   `ITaskbarList::DeleteTab(hwnd)` / `AddTab(hwnd)`。
+3. **winit `window_state.rs`**：`WindowFlags::apply_diff()` 在**任何** flag diff 时
+   （show 时的 VISIBLE、置顶变化等）用 winit 内部 flag **整体重算并重写**
+   `GWL_STYLE`/`GWL_EXSTYLE`，且 `ON_TASKBAR` 默认置位 → show 时加
+   `WS_EX_APPWINDOW`。⇒ 外部预设的 TOOLWINDOW 位会在 show 那一刻被覆写；
+   show 之后改 exstyle 则按钮已创建、改位不删除按钮。两种旧做法**结构性必败**。
+4. 任务栏按钮由 shell 在窗口**变可见时**创建 ⇒ 正确时机只有二：show 前（被 3 覆写，
+   不可用）或 show 后用 DeleteTab 删除（winit 认可机制，且不受样式重写影响）。
+
+### 13.2 修改清单（每个细节）
+
+* **`helper/src/platform.rs` Windows 段重写**（唯一功能性改动面）：
+  1. 新增 raw COM 声明（不引 windows crate）：`Guid`（{56FDF344-FD6D-11D0-958A-006097C9A090}
+     = CLSID_TaskbarList；{56FDF342-…} = IID_ITaskbarList）、`ITaskbarListVtbl`
+     （COM ABI 顺序：IUnknown 的 QueryInterface/AddRef/Release + ITaskbarList 的
+     HrInit/AddTab/DeleteTab/MarkFullscreenWindow/SetActiveAlt）、`CoInitializeEx` /
+     `CoCreateInstance`（ole32）、`GetWindowLongPtrW/SetWindowLongPtrW/GetSystemMetrics`（user32）。
+  2. `TASKBAR_LIST: AtomicIsize` 进程级缓存：接口指针按公寓（apartment）归属，
+     我们永远在同一 UI 线程调用 ⇒ 缓存安全；不 Release（进程寿命持有）。
+  3. `taskbar_delete_tab(hwnd)`：`CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)`
+     （引用计数式，已初始化返回 S_FALSE 无视）→ `CoCreateInstance(CLSID_TaskbarList,
+     CLSCTX_ALL, IID_ITaskbarList)` → `HrInit` 一次 → `DeleteTab(hwnd)`；失败返回 false。
+  4. `windows_skip_taskbar(window)`（幂等）：`raw-window-handle` 取 HWND 并缓存
+     （`OVERLAY_HWND`）→ `DeleteTab` + `exstyle |= WS_EX_TOOLWINDOW &= !WS_EX_APPWINDOW`
+     （后者防 shell 在 explorer 重启等场景重建按钮，并顺带退出 Alt-Tab）；
+     返回描述串供日志。
+  5. **删除**旧无效操作：caption/style 剥离（winit 创建期已按 `no-frame` 生成无边框，
+     事后剥离会被 apply_diff 覆写）、`SetWindowPos(SWP_FRAMECHANGED)`（无必要）、
+     TOPMOST 周期刷新（Slint `always-on-top` → winit `ALWAYS_ON_TOP` 已管理）。
+     全程**无** `ShowWindow(SW_HIDE/SW_SHOW)`（round-3/4 灰帧残影根因）。
+* **`helper/src/main.rs` 3 行**：1Hz `pos_timer` 回调开头 `#[cfg(windows)]`
+   重申 `apply_skip_taskbar`（DeleteTab 幂等、µs 级；治愈 explorer 重启后的按钮复活）。
+* **调用链不变**：show 后 ~150ms 重试链首应用（12 次重试等 handle 可用）；
+   热替换产生新窗口时重试链再次应用（E2E 日志 0.22s 与 4.26s 两条即此）。
+* **X11 / macOS / Wayland 路径零改动**（X11 的 `_NET_WM_STATE_SKIP_TASKBAR` 为 WM
+   管理、持久有效；macOS Accessory 为进程级；Wayland 无客户端协议）。
+
+### 13.3 行为与边界
+
+* Alt-Tab：TOOLWINDOW 位存活期间一并排除；若未来 winit apply_diff 覆写该位，
+  任务栏仍由 1Hz DeleteTab 兜底（Alt-Tab 可能回归——可接受的取舍）。
+* COM 失败（极罕见）降级为仅 exstyle，日志明示。
+* 验证：`x86_64-pc-windows-gnu` 交叉 check 零告警；Linux E2E 交互/标志/热替换全绿；
+  18 项测试全过；zip 重打包（含新 Windows helper）。

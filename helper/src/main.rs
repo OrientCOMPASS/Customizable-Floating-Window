@@ -426,6 +426,12 @@ fn setup_timers(shared: Arc<Shared>) {
     // drag is running (drag-end reports those) and on Wayland (no API).
     let pos_timer = Timer::default();
     pos_timer.start(TimerMode::Repeated, Duration::from_millis(1000), || {
+        // Windows: re-assert taskbar exclusion ~1 Hz (heals explorer restarts;
+        // DeleteTab + exstyle are idempotent, µs-cost).
+        #[cfg(windows)]
+        {
+            let _ = with_window(|w| platform::apply_skip_taskbar(w));
+        }
         if !platform::position_api_usable() {
             return;
         }
