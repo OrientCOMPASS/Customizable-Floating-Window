@@ -52,17 +52,6 @@ fi
 # platforms (the in-process winit thread proved unstable inside the host
 # process on Windows), so bin/ carries a helper per platform again.
 
-# bin/ note: helper subprocess exists only for macOS (winit main-thread rule)
-mkdir -p "$OUT/bin"
-cat > "$OUT/bin/README.txt" <<'EOF'
-bin/ holds the floating_helper subprocess binary for macOS only
-(floating-helper-macos-aarch64): on macOS, winit/Slint require the process
-main thread for the event loop, which the Tauri host owns, so the UI runs in
-this helper. On Windows/Linux the Slint UI runs inside the plugin process on
-a plugin-owned thread — no helper binary is needed or shipped.
-The official release zip (GitHub Release) contains the macOS helper; local
-dev bundles built off-macOS omit it.
-EOF
 
 ( cd "$OUT" && zip -qr "../plugin-linux+windows.zip" . )
 echo "==> dist/plugin-linux+windows.zip"

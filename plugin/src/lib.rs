@@ -65,6 +65,8 @@ const POS_WRITE: Duration = Duration::from_millis(1000);
 /// crashes (until the user intervenes from the panel).
 const MAX_RESTARTS: u32 = 6;
 const RESTART_CAP: Duration = Duration::from_secs(15);
+/// A helper that stays healthy this long resets the crash counter.
+const HEALTHY_RESET: Duration = Duration::from_secs(60);
 
 /// Bundled themes — written into `<plugindir>/themes/` on first run so the
 /// user can copy/modify them; never overwritten unless the panel asks.
@@ -86,7 +88,6 @@ struct Cfg {
 }
 
 struct Core {
-    #[allow(dead_code)] // used only under cfg(target_os = "macos")
     dir: PathBuf,
     themes_dir: PathBuf,
     cfg: Cfg,
@@ -202,11 +203,6 @@ impl Core {
 
     // ── themes ──
 
-    /// Write bundled themes. Upgrade policy: a file carrying the
-    /// `// cfw-bundled:` marker is considered factory content and is
-    /// refreshed on plugin upgrade; marker-less files are user property and
-    /// are never touched (users who edit a built-in theme should remove the
-    /// marker line or copy it to a new file name).
     fn ensure_themes(&self) {
         if let Err(e) = std::fs::create_dir_all(&self.themes_dir) {
             abi::log_error(&format!("cannot create themes dir: {e}"));
@@ -215,6 +211,9 @@ impl Core {
         for (name, src) in BUNDLED {
             let p = self.themes_dir.join(name);
             let existing = std::fs::read_to_string(&p).ok();
+            // Upgrade policy: files carrying the `// cfw-bundled:` marker are
+            // factory content and refresh on plugin upgrade; marker-less files
+            // are user property and are never touched.
             let write = match existing.as_deref() {
                 None => true,
                 Some(old) => old.contains("cfw-bundled:") && old != *src,
@@ -298,9 +297,12 @@ impl Core {
             self.helper_state = "crashed".into();
             if !self.crash_notified {
                 self.crash_notified = true;
-                abi::log_error(&format!(
-                    "ui runtime crashed {MAX_RESTARTS}× — giving up; use the panel to restart"
-                ));
+                let tail = self
+                    .helper
+                    .as_ref()
+                    .map(|h| h.stderr_snapshot().join(" | "))
+                    .unwrap_or_default();
+                abi::log_error(&format!("helper crashed {MAX_RESTARTS}× — giving up. stderr tail: {tail}"));
                 abi::notify(
                     "悬浮窗 FloatingWindow",
                     "悬浮窗进程反复崩溃，已停止重试。可在插件面板中重启或更换主题。",
@@ -331,14 +333,21 @@ impl Core {
                     ran.as_secs_f32(),
                     tail.join(" | ")
                 ));
+                let was_healthy = ran >= HEALTHY_RESET;
                 self.helper = None;
+                if was_healthy {
+                    self.restarts = 0;
+                }
                 if self.cfg.visible {
                     self.schedule_retry();
                 } else {
-                    // Hidden by user → expected exit (the Slint loop quits
-                    // when the last window hides). Not a crash.
+                    // Hidden by user → expected exit (event loop quits when
+                    // the last window hides). Not a crash.
                     self.helper_state = "hidden".into();
                 }
+            } else if h.started_at.elapsed() >= HEALTHY_RESET && self.restarts > 0 {
+                self.restarts = 0;
+                self.gave_up = false;
             }
         }
         if self.cfg.visible && self.helper.is_none() && !self.gave_up && Instant::now() >= self.next_retry
@@ -527,8 +536,8 @@ impl Core {
                 if self.helper.is_none() {
                     self.spawn_helper();
                 }
-            } else if let Some(l) = self.helper.as_ref() {
-                l.send(&Cmd::Visible { show: false });
+            } else if let Some(h) = self.helper.as_ref() {
+                h.send(&Cmd::Visible { show: false });
                 self.helper_state = "hidden".into();
             }
         }
@@ -583,8 +592,8 @@ impl Core {
                 self.next_retry = Instant::now();
                 if self.helper.is_none() {
                     self.spawn_helper();
-                } else if let Some(l) = self.helper.as_ref() {
-                    l.send(&Cmd::Visible { show: true });
+                } else if let Some(h) = self.helper.as_ref() {
+                    h.send(&Cmd::Visible { show: true });
                 }
             }
             "hide" => {
@@ -600,8 +609,8 @@ impl Core {
                 self.pending_pos = None;
                 self.set_cfg_key("windowX", "null");
                 self.set_cfg_key("windowY", "null");
-                if let Some(l) = self.helper.as_ref() {
-                    l.send(&Cmd::PosDefault);
+                if let Some(h) = self.helper.as_ref() {
+                    h.send(&Cmd::PosDefault);
                 }
             }
             "snapshot" => {
@@ -787,12 +796,6 @@ pub unsafe extern "C" fn micyou_plugin_init(host: *const mpl_host_api_t) -> mpl_
         core.muted = abi::get_muted().unwrap_or(false);
 
         core.publish_theme_list(true);
-        {
-            let dir_json =
-                serde_json::to_string(&core.themes_dir.display().to_string())
-                    .unwrap_or_else(|_| "\"\"".into());
-            core.set_cfg_key("themesDir", &dir_json);
-        }
         abi::set_panel_icon(PANEL_ID, "🪟");
 
         if core.cfg.visible {

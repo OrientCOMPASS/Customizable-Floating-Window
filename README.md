@@ -9,11 +9,11 @@
 | | |
 |---|---|
 | 插件 id | `opss.customizable-floating-window` |
-| 运行时 | Native（cdylib，C ABI v1 / Host API v2）+ `floating_helper` Slint 子进程（三平台一致） |
+| 运行时 | Native（cdylib，C ABI v1 / Host API v2）+ 独立 Slint helper 子进程 |
 | 平台 | Windows 10+ (x86_64) · Linux X11/Wayland (x86_64) · macOS 11+ (arm64/x86_64) |
 | 插件类型 | `ui`（不进 DSP 链，不碰音频数据） |
 | 权限 | `audio.state` `control.observe` `control.intercept` `config.read` `config.write`（最小化） |
-| 许可 | GPL-3.0-only（Slint 经 GPLv3 路径使用；Slint © SixtyFPS GmbH） |
+| 许可 | Unlicense（公有领域） |
 
 ![themes](dist/shots/themes-sheet.png)
 *三个内置主题 × 三种状态（串流 / 静音 / 空闲），透明背景合成于深色桌面预览。*
@@ -33,9 +33,9 @@ opss.customizable-floating-window/
 ├── customizable_floating_window.{dll,so,dylib}   # 插件核心（宿主按平台补后缀）
 ├── panel.html                      # 设置面板（主题切换/编辑器/状态）
 ├── bin/
-│   ├── floating-helper-windows-x86_64.exe        # Slint UI 子进程（按平台自选）
+│   ├── floating-helper-windows-x86_64.exe
 │   ├── floating-helper-linux-x86_64
-│   └── floating-helper-macos-aarch64
+│   └── floating-helper-macos-aarch64             # Slint UI 子进程
 └── themes/
     ├── ring.slint                  # 默认：复刻 MicYou v1 音量环
     ├── pill.slint                  # 信息条：电平条+时长+按钮
@@ -44,28 +44,15 @@ opss.customizable-floating-window/
 
 ## 使用
 
-* **左键单击**悬浮窗 = 切换宿主静音（移动事件 <2 次判为点击）；
-* **左键拖动** = 移动窗口（drag v2 协议，1:1 跟手；位置自动持久化，重启恢复）；
-* **右键**（ring/minimal）= 切换耳返；pill 为右键上下文菜单；
-* 耳返开启时 ring/minimal 外圈显示绿色细环；
-* **WDIS 语音转录**：安装并启用 WhatdidIsay 插件后，悬浮窗会短暂展示识别文本
-  （ring：圆下方直径宽文本框渐变消失；pill：底部下伸面板收回）；
-  面板「选项」可开关与调整保持时长；
+* **左键单击**悬浮窗 = 切换宿主静音（未拖动阈值 4px，与 v1 一致）；
+* **左键拖动** = 移动窗口（位置自动持久化，重启恢复）；
+* **右键** = 上下文菜单（静音 / 耳返 / 隐藏 / 重载主题）；
 * **设置面板**（设置 → 插件 → 「悬浮窗设置」）：
   * 实时状态（串流/电平/静音/耳返/本次连接时长/设备/格式）；
   * 主题列表单选切换（**热替换**，不重启进程）、「热重载」、「恢复内置主题」、「位置复位」；
   * 在线 `.slint` 编辑器：保存即入列表；
   * 显示开关、刷新间隔（50–1000ms）。
 * 直接增删 `themes/*.slint` 文件也可以：列表约 5 秒内自动刷新。
-
-### 修改主题（推荐路线）
-
-**优先使用 AI/LLM**：把目标 `.slint` 文件与面板内「主题契约」一起交给 AI 助手修改，
-或直接用文本编辑器打开面板显示的主题目录（`themesDir`，形如
-`~/.config/micyou/plugins/opss.customizable-floating-window/themes/`）中的文件；
-保存后回面板点「热重载当前主题」。面板在线编辑器仅用于快速微调。
-内置主题首行带 `// cfw-bundled:` 标记：插件升级时仅覆盖**带标记**的文件；
-你的自定义文件（或删掉标记的副本）永不动。
 
 主题编译失败时：悬浮窗回退到内置 `ring.slint` 保证有窗可用，面板与系统通知给出诊断。
 
@@ -120,5 +107,4 @@ tools/mock-host --plugin target/release/libcustomizable_floating_window.so \
 
 ## 许可
 
-GPL-3.0-only — 见 [LICENSE](LICENSE)。Slint GUI  toolkit 经其 GPLv3 路径使用
-（Slint © SixtyFPS GmbH）；许可证选择缘由见 docs/TECHNICAL.md §11。
+Unlicense — 见 [LICENSE](LICENSE)。

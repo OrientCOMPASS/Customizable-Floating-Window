@@ -1,31 +1,28 @@
-//! Platform window plumbing that Slint does not model.
+//! Platform window plumbing that Slint does not model:
 //!
-//! # Root-cause lesson (round-4 regression, see docs/TECHNICAL.md §7.8)
-//! winit owns `GWL_STYLE`/`GWL_EXSTYLE` on Windows: it recomputes them from its
-//! internal state whenever visibility/decorations change (`WindowFlags::apply`).
-//! Post-creation mutations of those bits (WS_EX_TOOLWINDOW, caption stripping,
-//! `ShowWindow` hide/show cycles, blur-behind re-application) get **wiped** or
-//! desync winit's redraw bookkeeping — observed symptoms: grey window that
-//! only repaints interacted components (winit believed it was hidden), caption
-//! re-appearing, taskbar button returning (winit re-applied WS_EX_APPWINDOW).
+//! 1. **Skip taskbar** — Slint has no `skip-taskbar` window property (checked
+//!    the whole 1.18 source tree). We post-process the native window through
+//!    `Window::window_handle()` (feature `raw-window-handle-06`):
+//!      * Windows: add `WS_EX_TOOLWINDOW` to the extended style → no taskbar
+//!        button, no Alt-Tab entry.
+//!      * X11: append `_NET_WM_STATE_SKIP_TASKBAR` + `_NET_WM_STATE_SKIP_PAGER`
+//!        to `_NET_WM_STATE` (EWMH — honored by GNOME Shell, KDE, XFCE, …).
+//!      * Wayland: no client-side protocol exists; visibility in any bar is
+//!        compositor policy. Nothing we can do (documented limitation).
+//!      * macOS: there is no taskbar; the equivalent is the Dock/app switcher.
+//!        We set `NSApplicationActivationPolicyAccessory` on the *helper
+//!        process* (see [`macos_set_accessory_policy`]) → no Dock icon, no
+//!        Cmd-Tab entry, windows still interactive.
+//! 2. **Primary screen size** — needed for the default top-right placement
+//!    (Slint exposes no monitor API). Same FFI story per platform.
 //!
-//! Therefore this module only touches attributes winit does NOT manage:
-//!   * Windows: window **ownership** (`GWLP_HWNDPARENT` → invisible owner).
-//!     Owned windows get no taskbar button and no Alt-Tab entry; the shell
-//!     groups them under the owner, which is never shown.
-//!   * X11: `_NET_WM_STATE_SKIP_TASKBAR/_NET_WM_STATE_SKIP_PAGER` (WM-managed,
-//!     persists) + `_MOTIF_WM_HINTS` decorations=0 (CSD shells).
-//!   * macOS: process-level `NSApplicationActivationPolicyAccessory` (outside
-//!     window management) → no Dock icon / Cmd-Tab entry.
-//!   * Wayland: no client-side protocol → no-op + log.
-//! Window decoration/transparency themselves are honored by winit **at window
-//! creation** from the `.slint` Window item (`no-frame`, `background`) — the
-//! X11 depth-32 ARGB measurement proves the creation path; we never fight it.
+//! All FFI is raw `extern` declarations (no platform crates beyond `x11-dl`
+//! on Linux, which dlopens libX11 so there is no link-time dependency and
+//! headless builds keep working).
 
 use slint::Window;
 
-/// Apply the platform's taskbar/alt-tab/dock exclusion. Idempotent; called
-/// from a retry chain after show (the raw handle only exists once mapped).
+/// Description of what was applied (for the helper log).
 pub fn apply_skip_taskbar(window: &Window) -> &'static str {
     #[cfg(windows)]
     return windows_skip_taskbar(window);
@@ -33,8 +30,7 @@ pub fn apply_skip_taskbar(window: &Window) -> &'static str {
     return linux_skip_taskbar(window);
     #[cfg(target_os = "macos")]
     {
-        let _ = window;
-        macos_set_accessory_policy();
+        let _ = window; // policy is process-wide, applied in main()/retry chain
         return "macos-accessory-policy";
     }
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
@@ -44,13 +40,13 @@ pub fn apply_skip_taskbar(window: &Window) -> &'static str {
     }
 }
 
-/// Primary screen size in physical pixels (None → keep WM placement).
+/// Primary screen size in physical pixels (fallback: None → keep WM placement).
 pub fn screen_size() -> Option<(i32, i32)> {
     #[cfg(windows)]
     {
         unsafe {
-            let w = win::GetSystemMetrics(win::SM_CXSCREEN);
-            let h = win::GetSystemMetrics(win::SM_CYSCREEN);
+            let w = GetSystemMetrics(SM_CXSCREEN);
+            let h = GetSystemMetrics(SM_CYSCREEN);
             (w > 0 && h > 0).then_some((w, h))
         }
     }
@@ -66,7 +62,8 @@ pub fn screen_size() -> Option<(i32, i32)> {
     #[cfg(all(target_os = "linux", not(target_os = "android")))]
     {
         // Under Wayland there is no reliable client-side screen geometry
-        // (and winit refuses absolute positioning anyway).
+        // (and winit refuses absolute positioning anyway) → let the
+        // compositor place the window.
         if is_wayland() {
             return None;
         }
@@ -74,7 +71,9 @@ pub fn screen_size() -> Option<(i32, i32)> {
     }
 }
 
-/// Whether absolute window positioning works (false on Wayland).
+/// Whether absolute window positioning works on this session.
+/// False only for Wayland (winit reports dummy (0,0) positions there and
+/// refuses `set_position`); true on Windows/X11/macOS.
 pub fn position_api_usable() -> bool {
     #[cfg(all(target_os = "linux", not(target_os = "android")))]
     {
@@ -92,44 +91,91 @@ pub fn is_wayland() -> bool {
         || std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland")
 }
 
+/// macOS: make the helper an "accessory" app (no Dock icon / app menu).
+/// Called once at startup *and* again after the window shows, because winit
+/// applies its default (Regular) activation policy when the event loop
+/// starts — whichever call lands last wins, so we re-assert after show.
+#[cfg(target_os = "macos")]
+pub fn macos_set_accessory_policy() {
+    use std::ffi::CString;
+    const NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY: isize = 1;
+    unsafe {
+        let cls_name = match CString::new("NSApplication") {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let sel_shared = match CString::new("sharedApplication") {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let sel_policy = match CString::new("setActivationPolicy:") {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let cls = objc_getClass(cls_name.as_ptr());
+        if cls.is_null() {
+            return;
+        }
+        let sel_shared = sel_registerName(sel_shared.as_ptr());
+        let sel_policy = sel_registerName(sel_policy.as_ptr());
+        if sel_shared.is_null() || sel_policy.is_null() {
+            return;
+        }
+        // fn-item → ptr cast, then transmute to the typed signature
+        // (objc_msgSend is untyped by design; per-signature pointers are the
+        // standard raw-ObjC pattern).
+        let msg0: MsgSend0 = std::mem::transmute(objc_msgSend as *const c_void);
+        let app = msg0(cls, sel_shared);
+        if app.is_null() {
+            return;
+        }
+        let msg1: MsgSendI = std::mem::transmute(objc_msgSend as *const c_void);
+        msg1(app, sel_policy, NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn macos_set_accessory_policy() {}
+
 // ─────────────────────────── Windows ───────────────────────────
 
 #[cfg(windows)]
 mod win {
     use std::ffi::c_void;
     pub type HWND = *mut c_void;
-    pub const GWL_HWNDPARENT: i32 = -21;
-    pub const WS_POPUP: u32 = 0x8000_0000;
-    pub const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    pub const GWL_EXSTYLE: i32 = -20;
+    pub const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
+    pub const SWP_NOSIZE: u32 = 0x0001;
+    pub const SWP_NOMOVE: u32 = 0x0002;
+    pub const SWP_NOZORDER: u32 = 0x0004;
+    pub const SWP_NOACTIVATE: u32 = 0x0010;
+    pub const SWP_FRAMECHANGED: u32 = 0x0020;
     pub const SM_CXSCREEN: i32 = 0;
     pub const SM_CYSCREEN: i32 = 1;
 
     #[link(name = "user32")]
     extern "system" {
-        pub fn GetSystemMetrics(index: i32) -> i32;
+        pub fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> isize;
         pub fn SetWindowLongPtrW(hwnd: HWND, index: i32, new_long: isize) -> isize;
-        pub fn CreateWindowExW(
-            dw_ex_style: u32,
-            lp_class_name: *const u16,
-            lp_window_name: *const u16,
-            dw_style: u32,
+        pub fn SetWindowPos(
+            hwnd: HWND,
+            insert_after: HWND,
             x: i32,
             y: i32,
-            w: i32,
-            h: i32,
-            hwnd_parent: HWND,
-            h_menu: *mut c_void,
-            h_instance: *mut c_void,
-            lp_param: *mut c_void,
-        ) -> HWND;
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> i32;
+        pub fn GetSystemMetrics(index: i32) -> i32;
     }
 }
 
 #[cfg(windows)]
+use win::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+
+#[cfg(windows)]
 fn windows_skip_taskbar(window: &Window) -> &'static str {
     use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
-    use std::sync::atomic::{AtomicIsize, Ordering};
-    static OWNER: AtomicIsize = AtomicIsize::new(0);
     let wh = window.window_handle();
     let Ok(handle) = wh.window_handle() else {
         return "no-handle";
@@ -138,41 +184,53 @@ fn windows_skip_taskbar(window: &Window) -> &'static str {
         return "not-win32";
     };
     unsafe {
-        let mut owner = OWNER.load(Ordering::Relaxed);
-        if owner == 0 {
-            // Invisible, never-shown tool popup as owner (process lifetime).
-            let class: &[u16] = &[
-                'S' as u16, 'T' as u16, 'A' as u16, 'T' as u16, 'I' as u16, 'C' as u16, 0,
-            ];
-            let name: &[u16] = &[0];
-            let hwnd = win::CreateWindowExW(
-                win::WS_EX_TOOLWINDOW,
-                class.as_ptr(),
-                name.as_ptr(),
-                win::WS_POPUP,
-                0,
-                0,
-                0,
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            );
-            if !hwnd.is_null() {
-                owner = hwnd as isize;
-                OWNER.store(owner, Ordering::Relaxed);
-            }
-        }
-        if owner != 0 {
-            win::SetWindowLongPtrW(h.hwnd.get() as win::HWND, win::GWL_HWNDPARENT, owner);
-            return "owned-window";
-        }
-        "owner-create-failed"
+        let hwnd = h.hwnd.get() as win::HWND;
+        let ex = win::GetWindowLongPtrW(hwnd, win::GWL_EXSTYLE);
+        win::SetWindowLongPtrW(hwnd, win::GWL_EXSTYLE, ex | win::WS_EX_TOOLWINDOW);
+        win::SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            win::SWP_NOMOVE
+                | win::SWP_NOSIZE
+                | win::SWP_NOZORDER
+                | win::SWP_NOACTIVATE
+                | win::SWP_FRAMECHANGED,
+        );
     }
+    "ws_ex_toolwindow"
 }
 
-// ─────────────────────────── Linux / X11 ───────────────────────────
+// ─────────────────────────── macOS ─────────────────────────────
+
+#[cfg(target_os = "macos")]
+use std::ffi::{c_char, c_void};
+
+#[cfg(target_os = "macos")]
+type MsgSend0 = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
+#[cfg(target_os = "macos")]
+type MsgSendI = unsafe extern "C" fn(*mut c_void, *mut c_void, isize);
+
+#[cfg(target_os = "macos")]
+#[link(name = "objc")]
+extern "C" {
+    fn objc_getClass(name: *const c_char) -> *mut c_void;
+    fn sel_registerName(name: *const c_char) -> *mut c_void;
+    fn objc_msgSend();
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayPixelsWide(display: u32) -> usize;
+    fn CGDisplayPixelsHigh(display: u32) -> usize;
+}
+
+// ─────────────────────────── Linux/X11 ─────────────────────────
 
 #[cfg(all(target_os = "linux", not(target_os = "android")))]
 fn x11_screen_size() -> Option<(i32, i32)> {
@@ -220,8 +278,8 @@ fn linux_skip_taskbar(window: &Window) -> &'static str {
             return "atom-error";
         }
 
-        // Read the existing _NET_WM_STATE (XA_ATOM = 4) so we append instead of
-        // clobbering states the WM already set (e.g. ABOVE for always-on-top).
+        // Read the existing _NET_WM_STATE (XA_ATOM = 4) so we append instead
+        // of clobbering states the WM already set (e.g. ABOVE for always-on-top).
         const XA_ATOM: x11_dl::xlib::Atom = 4;
         let mut actual_type: x11_dl::xlib::Atom = 0;
         let mut actual_format: std::os::raw::c_int = 0;
@@ -257,47 +315,17 @@ fn linux_skip_taskbar(window: &Window) -> &'static str {
                 atoms.push(a);
             }
         }
+        // PropModeReplace = 0
         (xlib.XChangeProperty)(
             disp,
             win_id,
             state_atom,
             XA_ATOM,
             32,
-            0, // PropModeReplace
+            0,
             atoms.as_ptr() as *const std::os::raw::c_uchar,
             atoms.len() as std::os::raw::c_int,
         );
-
-        // Belt & suspenders for WMs that add frames/CSDs anyway (some CJK
-        // desktop shells): MOTIF_WM_HINTS with decorations = 0.
-        let motif = intern(&xlib, disp, b"_MOTIF_WM_HINTS\0");
-        if motif != 0 {
-            #[repr(C)]
-            struct MotifHints {
-                flags: u64,
-                functions: u64,
-                decorations: u64,
-                input_mode: i64,
-                status: u64,
-            }
-            let hints = MotifHints {
-                flags: 1 << 1, // MWM_HINTS_DECORATIONS
-                functions: 0,
-                decorations: 0,
-                input_mode: 0,
-                status: 0,
-            };
-            (xlib.XChangeProperty)(
-                disp,
-                win_id,
-                motif,
-                motif,
-                32,
-                0,
-                &hints as *const MotifHints as *const std::os::raw::c_uchar,
-                5,
-            );
-        }
         (xlib.XFlush)(disp);
         (xlib.XCloseDisplay)(disp);
     }
@@ -319,84 +347,11 @@ unsafe fn intern(
     }
 }
 
-// ─────────────────────────── macOS ─────────────────────────────
-
-#[cfg(target_os = "macos")]
-use std::ffi::{c_char, c_void};
-
-#[cfg(target_os = "macos")]
-type MsgSend0 = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
-#[cfg(target_os = "macos")]
-type MsgSendI = unsafe extern "C" fn(*mut c_void, *mut c_void, isize);
-
-#[cfg(target_os = "macos")]
-#[link(name = "objc")]
-extern "C" {
-    fn objc_getClass(name: *const c_char) -> *mut c_void;
-    fn sel_registerName(name: *const c_char) -> *mut c_void;
-    fn objc_msgSend();
-}
-
-#[cfg(target_os = "macos")]
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGMainDisplayID() -> u32;
-    fn CGDisplayPixelsWide(display: u32) -> usize;
-    fn CGDisplayPixelsHigh(display: u32) -> usize;
-}
-
-/// macOS: hide from Dock / Cmd-Tab by making the helper an *accessory* app.
-/// Asserted at startup and re-asserted by the post-show retry chain, because
-/// winit resets the activation policy to Regular when it initializes
-/// NSApplication. Process-level only — never touches window state.
-#[cfg(target_os = "macos")]
-pub fn macos_set_accessory_policy() {
-    use std::ffi::CString;
-    const NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY: isize = 1;
-    unsafe {
-        let cls_name = match CString::new("NSApplication") {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let sel_shared = match CString::new("sharedApplication") {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let sel_policy = match CString::new("setActivationPolicy:") {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let cls = objc_getClass(cls_name.as_ptr());
-        if cls.is_null() {
-            return;
-        }
-        let sel_shared = sel_registerName(sel_shared.as_ptr());
-        let sel_policy = sel_registerName(sel_policy.as_ptr());
-        if sel_shared.is_null() || sel_policy.is_null() {
-            return;
-        }
-        let msg0: MsgSend0 = std::mem::transmute(objc_msgSend as *const c_void);
-        let app = msg0(cls, sel_shared);
-        if app.is_null() {
-            return;
-        }
-        let msg1: MsgSendI = std::mem::transmute(objc_msgSend as *const c_void);
-        msg1(app, sel_policy, NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY);
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn macos_set_accessory_policy() {}
-
 // ─────────────────────────── global cursor ───────────────────────────
 
-/// Global cursor position in **physical pixels**, for the helper-side drag
-/// tracker (drag protocol v3). Returns None where unavailable (Wayland).
-///
-/// Using global coordinates removes the window-relative feedback loop
-/// entirely: the cursor frame is independent of the window we move, so
-/// `P = P0 + (C − C0)` is exact by construction (system-drag quality
-/// without a WM grab, and the client keeps every button event).
+/// Global cursor position in **physical pixels** for drag tracking.
+/// None where unavailable (Wayland): themes using WindowMoveArea remain the
+/// recommended pattern there.
 #[cfg(windows)]
 pub fn global_cursor(_scale: f32) -> Option<(f64, f64)> {
     #[repr(C)]
@@ -426,9 +381,7 @@ pub fn global_cursor(_scale: f32) -> Option<(f64, f64)> {
     thread_local! {
         static DISP: std::cell::Cell<Option<*mut xlib::Display>> = const { std::cell::Cell::new(None) };
     }
-    let Ok(xlib) = xlib::Xlib::open() else {
-        return None;
-    };
+    let Ok(xlib) = xlib::Xlib::open() else { return None };
     let disp = DISP.with(|d| {
         if let Some(p) = d.get() {
             return p;
@@ -451,15 +404,7 @@ pub fn global_cursor(_scale: f32) -> Option<(f64, f64)> {
         let mut wy: std::os::raw::c_int = 0;
         let mut mask: std::os::raw::c_uint = 0;
         if (xlib.XQueryPointer)(
-            disp,
-            root,
-            &mut root_ret,
-            &mut child,
-            &mut rx,
-            &mut ry,
-            &mut wx,
-            &mut wy,
-            &mut mask,
+            disp, root, &mut root_ret, &mut child, &mut rx, &mut ry, &mut wx, &mut wy, &mut mask,
         ) == 0
         {
             return None;
@@ -470,7 +415,7 @@ pub fn global_cursor(_scale: f32) -> Option<(f64, f64)> {
 
 #[cfg(target_os = "macos")]
 pub fn global_cursor(scale: f32) -> Option<(f64, f64)> {
-    use std::ffi::CString;
+    use std::ffi::{c_char, c_void, CString};
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct NsPoint {
@@ -478,6 +423,16 @@ pub fn global_cursor(scale: f32) -> Option<(f64, f64)> {
         y: f64,
     }
     type MsgSendPoint = unsafe extern "C" fn(*mut c_void, *mut c_void) -> NsPoint;
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGMainDisplayID() -> u32;
+        fn CGDisplayPixelsHigh(display: u32) -> usize;
+    }
     unsafe {
         let cls_name = CString::new("NSEvent").ok()?;
         let sel_name = CString::new("mouseLocation").ok()?;
@@ -490,12 +445,6 @@ pub fn global_cursor(scale: f32) -> Option<(f64, f64)> {
         let p = msg(cls, sel); // points, origin bottom-left
         let s = f64::from(scale.max(0.5));
         let h_px = CGDisplayPixelsHigh(CGMainDisplayID()) as f64;
-        // flip to top-left origin and convert points → physical pixels
         Some((p.x * s, (h_px / s - p.y) * s))
     }
-}
-
-#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-pub fn global_cursor(_scale: f32) -> Option<(f64, f64)> {
-    None
 }

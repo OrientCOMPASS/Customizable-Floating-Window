@@ -685,9 +685,7 @@ fn main() {
         println!("[{:>8.3}s] HOST → plugin message ui:apply-theme", elapsed());
         unsafe { f_msg(src.as_ptr(), topic.as_ptr(), payload.as_ptr(), payload.len() as u32) };
 
-        // t+7s: optional snapshot (visual verification under xvfb)
-                // t+5s: optional WDIS broadcast injection (MOCK_WDIS="text")
-        std::thread::sleep(Duration::from_secs(1));
+        // optional WDIS broadcast injection (MOCK_WDIS="text")
         if let Ok(text) = std::env::var("MOCK_WDIS") {
             let mut payload = b"WDIS".to_vec();
             payload.extend_from_slice(&1_700_000_000_000i64.to_le_bytes());
@@ -697,16 +695,12 @@ fn main() {
             let src = CString::new("opss.whatdidisay").unwrap();
             println!("[{:>8.3}s] HOST -> plugin message WDIS broadcast", elapsed());
             unsafe {
-                f_msg(
-                    src.as_ptr(),
-                    topic.as_ptr(),
-                    payload.as_ptr(),
-                    payload.len() as u32,
-                )
+                f_msg(src.as_ptr(), topic.as_ptr(), payload.as_ptr(), payload.len() as u32)
             };
         }
 
-std::thread::sleep(Duration::from_secs(3));
+        // t+7s: optional snapshot (visual verification under xvfb)
+        std::thread::sleep(Duration::from_secs(3));
         if let Ok(p) = std::env::var("MOCK_SNAPSHOT") {
             let payload = serde_json::json!({ "action": "snapshot", "path": p }).to_string();
             let topic = CString::new("ui:snapshot").unwrap();
@@ -722,8 +716,8 @@ std::thread::sleep(Duration::from_secs(3));
             };
         }
 
-        // t+9s: host-side mute flip (simulates GUI toggle -> mute_changed)
-        std::thread::sleep(Duration::from_secs(4));
+        // t+9s: host-side mute flip (simulates GUI toggle → mute_changed)
+        std::thread::sleep(Duration::from_secs(2));
         host().muted.store(true, Ordering::Relaxed);
         let t = CString::new("mute_changed").unwrap();
         let j = CString::new(r#"{"type":"mute_changed","muted":true}"#).unwrap();

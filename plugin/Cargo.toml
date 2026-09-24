@@ -17,4 +17,3 @@ crate-type = ["cdylib"]
 serde.workspace = true
 serde_json.workspace = true
 cfw-protocol = { path = "../protocol" }
-

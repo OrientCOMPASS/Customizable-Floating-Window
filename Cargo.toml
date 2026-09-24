@@ -9,7 +9,7 @@
 # (.github/workflows/release.yml) — see docs/TECHNICAL.md §9.
 
 [workspace]
-members = ["protocol", "uiruntime", "plugin", "helper", "tools/mock-host"]
+members = ["protocol", "plugin", "helper", "tools/mock-host"]
 resolver = "2"
 
 [workspace.package]
@@ -17,7 +17,7 @@ version = "1.0.0"
 edition = "2021"
 # Slint 1.18 requires rustc >= 1.95, so that is the MSRV of this workspace.
 rust-version = "1.95"
-license = "GPL-3.0-only"
+license = "Unlicense"
 publish = false
 
 [workspace.dependencies]

@@ -1,4 +1,4 @@
-// cfw-bundled: 2   (built-in theme revision; remove this line to freeze your own edits)
+// cfw-bundled: 3   (built-in theme revision; remove this line to freeze your own edits)
 // pill.slint — 信息条主题：电平条 + 状态点 + 连接时长 + 快捷按钮
 //
 // 演示另一种交互组合：
@@ -25,7 +25,7 @@ export component FloatingPill inherits Window {
     in property <string> device-mode: "";
     in property <string> info-text: "";        // "48.0kHz · 1ch · q13ms"（helper 预格式化）
     in property <string> arc-path: "";
-    in property <string> wdis-text: "";        // WDIS 语音转录文本（可选契约）
+    in property <string> wdis-text: "";        // WDIS 语音转录文本
     in property <bool> wdis-visible: false;    // WDIS 展示开关（helper 定时收回）
 
     // ── 交互输出 ──
@@ -44,6 +44,7 @@ export component FloatingPill inherits Window {
     in property <color> idle: #9aa0a6;
     in property <color> panel: #16181de6;      // 半透明深色底
 
+    // 窗口高度随 WDIS 下伸面板生长（顶边锚定不动）
     width: 224px; height: 56px + box-h;
     no-frame: true;
     always-on-top: true;
@@ -65,7 +66,6 @@ export component FloatingPill inherits Window {
         running: root.streaming && !root.muted;
         triggered => { root.blink = !root.blink; }
     }
-
 
     ContextMenuArea {
         Menu {
@@ -105,7 +105,6 @@ export component FloatingPill inherits Window {
             x: 0px; y: 56px;
             width: parent.width; height: root.box-h;
             background: #101216f0;
-            border-radius: 0px;
             clip: true;
             Text {
                 x: 12px; y: 6px;

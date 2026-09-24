@@ -12,7 +12,7 @@
     "zh-CN": "可自定义悬浮窗",
     "en": "Customizable Floating Window"
   },
-  "license": "GPL-3.0-only",
+  "license": "Unlicense",
   "runtime": "native",
   "entry": "customizable_floating_window",
   "platforms": [
@@ -94,24 +94,20 @@
       {
         "key": "wdisEnabled",
         "fieldType": "boolean",
-        "label": "显示 WDIS 语音转录 Show WDIS transcripts",
-        "description": "订阅 WhatdidIsay 插件的转录广播（宿主消息总线，magic=WDIS），在悬浮窗下方短暂展示识别文本。",
+        "label": "显示语音转录气泡",
+        "description": "语音转录来自 MicYou 插件 WhatdidIsay（本地离线识别）：每句话识别完成后经其广播协议（魔数 WDIS 的二进制帧、宿主消息总线广播）推送，悬浮窗下方短暂展示识别文本。",
         "default": true
       },
       {
         "key": "wdisHoldMs",
         "fieldType": "number",
-        "label": "转录展示时长 Transcript hold (ms)",
-        "description": "WDIS 文本在悬浮窗上的保持时间，1000–30000ms。",
+        "label": "转录保持 (ms)",
+        "description": "识别文本在悬浮窗上的保持时间，1000–30000ms。",
         "min": 1000,
         "max": 30000,
         "step": 500,
         "default": 4000
       }
     ]
-  },
-  "repository": "https://github.com/OrientCOMPASS/Customizable-Floating-Window",
-  "homepage": "https://github.com/OrientCOMPASS/Customizable-Floating-Window",
-  "updateUrl": "https://github.com/OrientCOMPASS/Customizable-Floating-Window/releases/latest/download/plugin.json",
-  "readmeUrl": "https://raw.githubusercontent.com/OrientCOMPASS/Customizable-Floating-Window/refs/heads/main/README.md"
+  }
 }
