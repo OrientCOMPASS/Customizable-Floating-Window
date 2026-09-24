@@ -7,7 +7,7 @@
 左键单击切静音、拖动移窗、右键交互——全部交互在 `.slint` 主题内定义。
 
 <div align="center">
-  <video src="https://github.com/user-attachments/assets/9eeae28e-4207-4b7c-b32f-7af50220d72a" 
+  <video src="https://github.com/user-attachments/assets/5eab3089-604a-48ac-bf1d-df13392b3755" 
          width="200" 
          autoplay 
          loop 
