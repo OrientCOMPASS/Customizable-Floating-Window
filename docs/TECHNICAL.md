@@ -411,6 +411,22 @@ TOPMOST）。跨进程 IPC、管道监督、owner-window 等 round 1–4 机制�
 `_NET_WM_STATE_SKIP_TASKBAR` 在位、快照 84×84、deinit 干净；actionlint 零告警；
 windows-gnu / aarch64-apple-darwin 交叉 check 零告警。
 
+### 7.10 第六轮大回退：进程内线程 → helper 子进程（用户实测驱动）
+
+**症状**（用户实测 round-5 构建）：内嵌线程版在真实 Windows 上“一直崩溃”。
+**根因分析**：winit/Slint 事件循环假设自己掌控进程的消息循环基础设施；嵌入 Tauri 宿主
+进程的非主线程后，Windows 的消息泵、DPI 感知上下文与 COM 公寓初始化与宿主相互干扰
+（Xvfb/沙箱无此冲突，故本地 E2E 全绿而真机崩溃——**本地绿不等于真机绿**的经验）。
+**处置**：大回退到用户确认“稳定运行、无绘制异常、无互动异常”的**进程模型**：
+三平台统一 helper 子进程；Windows 标志位沿用用户验证配方（去帽 + TOOLWINDOW/TOPMOST +
+去 APPWINDOW + FRAMECHANGED，周期刷新 TOPMOST，**无 hide/show**）；拖动为事件驱动
+全局光标增量；WDIS/主题契约/面板不变。
+**遗留已知瑕疵**：个别 Windows 机器上任务栏仍可能短暂出现悬浮窗条目（winit 在
+show 时创建任务栏按钮，创建后改 exstyle 不重建按钮；hide/show 可修但会破坏 DWM
+透明合成——两害相权保留透明与稳定）。若后续需要彻底去除，正路是推动 Slint/winit
+在上游暴露 skip-taskbar 创建期属性，或在 winit 创建窗口前 hook 其 builder（均超出
+插件边界）。
+
 ## 8. 资源利用设计
 
 | 项 | 设计 |

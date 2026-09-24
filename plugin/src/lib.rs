@@ -31,14 +31,12 @@
 #![allow(non_camel_case_types)]
 
 mod abi;
-#[cfg(target_os = "macos")]
 mod helper;
-mod uilink;
 mod session;
 
 use abi::{mpl_host_api_t, mpl_plugin_info_t, mpl_result_t};
 use cfw_protocol::{Cmd, Ev, StatePayload};
-use uilink::UiLink;
+use helper::HelperProc;
 use session::Session;
 use std::ffi::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -99,7 +97,7 @@ struct Core {
     session: Session,
     muted: bool,
     monitoring: bool,
-    link: Option<UiLink>,
+    helper: Option<HelperProc>,
     restarts: u32,
     next_retry: Instant,
     gave_up: bool,
@@ -142,7 +140,7 @@ impl Core {
             session: Session::new(),
             muted: false,
             monitoring: false,
-            link: None,
+            helper: None,
             restarts: 0,
             next_retry: Instant::now(),
             gave_up: false,
@@ -278,27 +276,18 @@ impl Core {
 
     fn spawn_helper(&mut self) {
         let theme = self.resolve_theme();
-        #[cfg(target_os = "macos")]
-        {
-            let pos = self.win_pos.unwrap_or((-1, -1));
-            match crate::helper::HelperProc::spawn(&self.dir, &theme, pos) {
-                Ok(h) => {
-                    abi::log_info(&format!("helper spawned (theme {})", theme.display()));
-                    self.link = Some(UiLink::Proc(h));
-                    self.helper_state = "starting".into();
-                }
-                Err(e) => {
-                    abi::log_error(&format!("helper spawn failed: {e}"));
-                    self.helper_state = "missing".into();
-                    self.schedule_retry();
-                }
+        let pos = self.win_pos.unwrap_or((-1, -1));
+        match HelperProc::spawn(&self.dir, &theme, pos) {
+            Ok(h) => {
+                abi::log_info(&format!("helper spawned (theme {})", theme.display()));
+                self.helper = Some(h);
+                self.helper_state = "starting".into();
             }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            abi::log_info(&format!("ui thread spawned (theme {})", theme.display()));
-            self.link = Some(UiLink::spawn_thread(theme, self.win_pos));
-            self.helper_state = "starting".into();
+            Err(e) => {
+                abi::log_error(&format!("helper spawn failed: {e}"));
+                self.helper_state = "missing".into();
+                self.schedule_retry();
+            }
         }
     }
 
@@ -325,18 +314,24 @@ impl Core {
     }
 
     fn kill_helper(&mut self) {
-        if let Some(l) = self.link.take() {
-            l.shutdown();
+        if let Some(h) = self.helper.take() {
+            h.shutdown();
         }
     }
 
     /// Per-tick health supervision: detect death, restart with backoff,
     /// reset counters after a long healthy run.
     fn supervise_helper(&mut self) {
-        if let Some(l) = self.link.as_mut() {
-            if l.is_dead() {
-                abi::log_warn("ui runtime exited unexpectedly");
-                self.link = None;
+        if let Some(h) = self.helper.as_mut() {
+            if h.is_dead() {
+                let ran = h.started_at.elapsed();
+                let tail = h.stderr_snapshot();
+                abi::log_warn(&format!(
+                    "helper exited after {:.1}s; stderr tail: {}",
+                    ran.as_secs_f32(),
+                    tail.join(" | ")
+                ));
+                self.helper = None;
                 if self.cfg.visible {
                     self.schedule_retry();
                 } else {
@@ -346,7 +341,7 @@ impl Core {
                 }
             }
         }
-        if self.cfg.visible && self.link.is_none() && !self.gave_up && Instant::now() >= self.next_retry
+        if self.cfg.visible && self.helper.is_none() && !self.gave_up && Instant::now() >= self.next_retry
         {
             self.spawn_helper();
         }
@@ -355,8 +350,8 @@ impl Core {
     // ── events from the helper ──
 
     fn handle_helper_events(&mut self) {
-        let events = match self.link.as_ref() {
-            Some(l) => l.drain(),
+        let events = match self.helper.as_ref() {
+            Some(h) => h.drain_events(),
             None => return,
         };
         for ev in events {
@@ -421,9 +416,9 @@ impl Core {
 
     fn reload_theme(&mut self) {
         let path = self.resolve_theme();
-        match self.link.as_ref() {
-            Some(l) => {
-                l.send(&Cmd::Theme {
+        match self.helper.as_ref() {
+            Some(h) => {
+                h.send(&Cmd::Theme {
                     path: path.display().to_string(),
                 });
             }
@@ -452,8 +447,8 @@ impl Core {
             device_label: snap.label,
             device_mode: snap.mode,
         };
-        if let Some(l) = self.link.as_ref() {
-            l.send(&Cmd::State(payload.clone()));
+        if let Some(h) = self.helper.as_ref() {
+            h.send(&Cmd::State(payload.clone()));
         }
         self.mirror_status(&payload);
     }
@@ -529,17 +524,17 @@ impl Core {
                 self.gave_up = false;
                 self.restarts = 0;
                 self.next_retry = Instant::now();
-                if self.link.is_none() {
+                if self.helper.is_none() {
                     self.spawn_helper();
                 }
-            } else if let Some(l) = self.link.as_ref() {
+            } else if let Some(l) = self.helper.as_ref() {
                 l.send(&Cmd::Visible { show: false });
                 self.helper_state = "hidden".into();
             }
         }
         // position reset from panel (config cleared to null)
         if self.win_pos.is_none() && old_pos.is_some() {
-            if let Some(h) = self.link.as_ref() {
+            if let Some(h) = self.helper.as_ref() {
                 h.send(&Cmd::PosDefault);
             }
         }
@@ -586,16 +581,16 @@ impl Core {
                 self.set_cfg_key("visible", "true");
                 self.gave_up = false;
                 self.next_retry = Instant::now();
-                if self.link.is_none() {
+                if self.helper.is_none() {
                     self.spawn_helper();
-                } else if let Some(l) = self.link.as_ref() {
+                } else if let Some(l) = self.helper.as_ref() {
                     l.send(&Cmd::Visible { show: true });
                 }
             }
             "hide" => {
                 self.cfg.visible = false;
                 self.set_cfg_key("visible", "false");
-                if let Some(h) = self.link.as_ref() {
+                if let Some(h) = self.helper.as_ref() {
                     h.send(&Cmd::Visible { show: false });
                 }
                 self.helper_state = "hidden".into();
@@ -605,7 +600,7 @@ impl Core {
                 self.pending_pos = None;
                 self.set_cfg_key("windowX", "null");
                 self.set_cfg_key("windowY", "null");
-                if let Some(l) = self.link.as_ref() {
+                if let Some(l) = self.helper.as_ref() {
                     l.send(&Cmd::PosDefault);
                 }
             }
@@ -618,7 +613,7 @@ impl Core {
                 }
                 if let Ok(args) = serde_json::from_slice::<SnapArgs>(payload) {
                     if !args.path.is_empty() {
-                        if let Some(h) = self.link.as_ref() {
+                        if let Some(h) = self.helper.as_ref() {
                             h.send(&Cmd::Snapshot { path: args.path });
                         }
                     }
@@ -911,8 +906,8 @@ pub unsafe extern "C" fn micyou_plugin_handle_message(
             if !text.is_empty() {
                 let _ = with_core(|core| {
                     if core.cfg.wdis_enabled {
-                        if let Some(l) = core.link.as_ref() {
-                            l.send(&cfw_protocol::Cmd::Wdis {
+                        if let Some(h) = core.helper.as_ref() {
+                            h.send(&cfw_protocol::Cmd::Wdis {
                                 text,
                                 hold_ms: core.cfg.wdis_hold_ms,
                             });

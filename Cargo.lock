@@ -536,7 +536,6 @@ name = "cfw-plugin"
 version = "1.0.0"
 dependencies = [
  "cfw-protocol",
- "cfw-uiruntime",
  "serde",
  "serde_json",
 ]

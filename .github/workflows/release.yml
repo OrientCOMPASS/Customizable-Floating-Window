@@ -91,10 +91,15 @@ jobs:
             *.so)    cp target/release/lib${{ matrix.artifact }} stage/${{ matrix.artifact }} ;;
             *)       cp target/release/${{ matrix.artifact }} stage/ ;;
           esac
-          # macOS 额外携带 helper 子进程二进制（winit 主线程约束）
+          # helper 子进程二进制（round-6 进程模型：三平台均携带）
           if [ "${{ runner.os }}" = "macOS" ]; then
             cp target/release/floating_helper stage/floating-helper-macos-aarch64
             chmod +x stage/floating-helper-macos-aarch64
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/floating_helper.exe stage/floating-helper-windows-x86_64.exe
+          else
+            cp target/release/floating_helper stage/floating-helper-linux-x86_64
+            chmod +x stage/floating-helper-linux-x86_64
           fi
           ls -la stage/
 
@@ -132,6 +137,8 @@ jobs:
           test -f libs_flat/customizable_floating_window.so
           test -f libs_flat/customizable_floating_window.dylib
           test -f libs_flat/floating-helper-macos-aarch64
+          test -f libs_flat/floating-helper-windows-x86_64.exe
+          test -f libs_flat/floating-helper-linux-x86_64
 
       - name: 组装插件包目录（根即 plugin.json，可直接安装/导入）
         run: |
@@ -141,7 +148,9 @@ jobs:
           cp libs_flat/customizable_floating_window.dll \
              libs_flat/customizable_floating_window.so \
              libs_flat/customizable_floating_window.dylib stage/
-          cp libs_flat/floating-helper-macos-aarch64 stage/bin/
+          cp libs_flat/floating-helper-macos-aarch64 \
+             libs_flat/floating-helper-windows-x86_64.exe \
+             libs_flat/floating-helper-linux-x86_64 stage/bin/
           ls -la stage/ stage/bin/
 
       # artifact zip 的根即包内容（upload-artifact 剥离公共父目录），
@@ -211,6 +220,8 @@ jobs:
           test -f libs_flat/customizable_floating_window.so
           test -f libs_flat/customizable_floating_window.dylib
           test -f libs_flat/floating-helper-macos-aarch64
+          test -f libs_flat/floating-helper-windows-x86_64.exe
+          test -f libs_flat/floating-helper-linux-x86_64
 
       - name: 组装发布包（plugin.json 全通道同一份，回写版本化 downloadUrl）
         run: |
@@ -228,7 +239,9 @@ jobs:
           cp libs_flat/customizable_floating_window.dll \
              libs_flat/customizable_floating_window.so \
              libs_flat/customizable_floating_window.dylib stage/
-          cp libs_flat/floating-helper-macos-aarch64 stage/bin/
+          cp libs_flat/floating-helper-macos-aarch64 \
+             libs_flat/floating-helper-windows-x86_64.exe \
+             libs_flat/floating-helper-linux-x86_64 stage/bin/
           (cd stage && zip -q -r ../dist/${{ env.PLUGIN_ID }}-v${VER}.zip .)
           ls -la dist/
 

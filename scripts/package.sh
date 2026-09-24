@@ -21,18 +21,24 @@ cp themes/*.slint "$OUT/themes/"
 # Linux (native)
 if [ -f "target/$PROFILE/libcustomizable_floating_window.so" ]; then
   cp "target/$PROFILE/libcustomizable_floating_window.so" "$OUT/customizable_floating_window.so"
-  # (no helper binary for Linux: the Slint UI runs in-process since round 5)
+  cp "target/$PROFILE/floating_helper" "$OUT/bin/floating-helper-linux-x86_64"
+  chmod +x "$OUT/bin/floating-helper-linux-x86_64"
 fi
 
-# Windows (cross via mingw, or native on Windows runners).
-# NOTE: no helper binary for Windows/Linux — since round 5 the Slint UI runs
-# in-process on a plugin-owned thread there; only macOS ships the helper
-# subprocess (winit main-thread rule).
+# Windows (cross via mingw, or native on Windows runners)
 for cand in \
   "target/x86_64-pc-windows-gnu/$PROFILE/customizable_floating_window.dll" \
   "target/$PROFILE/customizable_floating_window.dll"; do
   if [ -f "$cand" ]; then
     cp "$cand" "$OUT/customizable_floating_window.dll"
+    break
+  fi
+done
+for cand in \
+  "target/x86_64-pc-windows-gnu/$PROFILE/floating_helper.exe" \
+  "target/$PROFILE/floating_helper.exe"; do
+  if [ -f "$cand" ]; then
+    cp "$cand" "$OUT/bin/floating-helper-windows-x86_64.exe"
     break
   fi
 done
@@ -42,6 +48,9 @@ if [ -f "target/$PROFILE/floating_helper" ] && [ "$(uname)" = "Darwin" ]; then
   cp "target/$PROFILE/floating_helper" "$OUT/bin/floating-helper-macos-aarch64"
   chmod +x "$OUT/bin/floating-helper-macos-aarch64"
 fi
+# NOTE: round 6 rolled back to the helper-subprocess process model on ALL
+# platforms (the in-process winit thread proved unstable inside the host
+# process on Windows), so bin/ carries a helper per platform again.
 
 # bin/ note: helper subprocess exists only for macOS (winit main-thread rule)
 mkdir -p "$OUT/bin"

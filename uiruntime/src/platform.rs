@@ -38,7 +38,6 @@ mod win {
     pub const WS_EX_TOPMOST: isize = 0x0000_0008;
     pub const SWP_NOSIZE: u32 = 0x0001;
     pub const SWP_NOMOVE: u32 = 0x0002;
-    pub const SWP_NOZORDER: u32 = 0x0004;
     pub const SWP_NOACTIVATE: u32 = 0x0010;
     pub const SWP_FRAMECHANGED: u32 = 0x0020;
     pub const SM_CXSCREEN: i32 = 0;

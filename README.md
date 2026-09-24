@@ -9,7 +9,7 @@
 | | |
 |---|---|
 | 插件 id | `opss.customizable-floating-window` |
-| 运行时 | Native（cdylib，C ABI v1 / Host API v2）；Slint UI 于插件进程内线程（Win/Linux）或 helper 子进程（macOS，winit 主线程约束） |
+| 运行时 | Native（cdylib，C ABI v1 / Host API v2）+ `floating_helper` Slint 子进程（三平台一致） |
 | 平台 | Windows 10+ (x86_64) · Linux X11/Wayland (x86_64) · macOS 11+ (arm64/x86_64) |
 | 插件类型 | `ui`（不进 DSP 链，不碰音频数据） |
 | 权限 | `audio.state` `control.observe` `control.intercept` `config.read` `config.write`（最小化） |
@@ -33,8 +33,9 @@ opss.customizable-floating-window/
 ├── customizable_floating_window.{dll,so,dylib}   # 插件核心（宿主按平台补后缀）
 ├── panel.html                      # 设置面板（主题切换/编辑器/状态）
 ├── bin/
-│   └── floating-helper-macos-aarch64             # 仅 macOS：Slint UI 子进程
-│                                                 # （Win/Linux UI 在插件进程内线程，无 helper）
+│   ├── floating-helper-windows-x86_64.exe        # Slint UI 子进程（按平台自选）
+│   ├── floating-helper-linux-x86_64
+│   └── floating-helper-macos-aarch64
 └── themes/
     ├── ring.slint                  # 默认：复刻 MicYou v1 音量环
     ├── pill.slint                  # 信息条：电平条+时长+按钮
