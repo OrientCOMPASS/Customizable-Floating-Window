@@ -21,27 +21,38 @@ cp themes/*.slint "$OUT/themes/"
 # Linux (native)
 if [ -f "target/$PROFILE/libcustomizable_floating_window.so" ]; then
   cp "target/$PROFILE/libcustomizable_floating_window.so" "$OUT/customizable_floating_window.so"
-  cp "target/$PROFILE/floating_helper" "$OUT/bin/floating-helper-linux-x86_64"
-  chmod +x "$OUT/bin/floating-helper-linux-x86_64"
+  # (no helper binary for Linux: the Slint UI runs in-process since round 5)
 fi
 
-# Windows (cross via mingw, or native on Windows runners)
+# Windows (cross via mingw, or native on Windows runners).
+# NOTE: no helper binary for Windows/Linux — since round 5 the Slint UI runs
+# in-process on a plugin-owned thread there; only macOS ships the helper
+# subprocess (winit main-thread rule).
 for cand in \
   "target/x86_64-pc-windows-gnu/$PROFILE/customizable_floating_window.dll" \
   "target/$PROFILE/customizable_floating_window.dll"; do
   if [ -f "$cand" ]; then
     cp "$cand" "$OUT/customizable_floating_window.dll"
-    cp "$(dirname "$cand")/floating_helper.exe" "$OUT/bin/floating-helper-windows-x86_64.exe"
     break
   fi
 done
 
-# macOS placeholder notice (filled by CI)
-cat > "$OUT/bin/README-macos.txt" <<'EOF'
-macOS helper binaries (floating-helper-macos-aarch64 / -x86_64) and the
-customizable_floating_window.dylib are produced by the release workflow
-(.github/workflows/release.yml) — Apple's SDK cannot be used off-macOS.
-Grab them from the latest GitHub Release's plugin.zip instead.
+# macOS helper (built natively on a Mac; absent in local dev bundles)
+if [ -f "target/$PROFILE/floating_helper" ] && [ "$(uname)" = "Darwin" ]; then
+  cp "target/$PROFILE/floating_helper" "$OUT/bin/floating-helper-macos-aarch64"
+  chmod +x "$OUT/bin/floating-helper-macos-aarch64"
+fi
+
+# bin/ note: helper subprocess exists only for macOS (winit main-thread rule)
+mkdir -p "$OUT/bin"
+cat > "$OUT/bin/README.txt" <<'EOF'
+bin/ holds the floating_helper subprocess binary for macOS only
+(floating-helper-macos-aarch64): on macOS, winit/Slint require the process
+main thread for the event loop, which the Tauri host owns, so the UI runs in
+this helper. On Windows/Linux the Slint UI runs inside the plugin process on
+a plugin-owned thread — no helper binary is needed or shipped.
+The official release zip (GitHub Release) contains the macOS helper; local
+dev bundles built off-macOS omit it.
 EOF
 
 ( cd "$OUT" && zip -qr "../plugin-linux+windows.zip" . )

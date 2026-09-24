@@ -17,3 +17,9 @@ crate-type = ["cdylib"]
 serde.workspace = true
 serde_json.workspace = true
 cfw-protocol = { path = "../protocol" }
+
+# Windows/Linux: the Slint UI runs in-process on a plugin-owned thread.
+# macOS: winit needs the process main thread (owned by the Tauri host), so the
+# UI lives in the floating_helper subprocess instead (see uilink).
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+cfw-uiruntime = { path = "../uiruntime" }

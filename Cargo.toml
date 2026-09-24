@@ -9,7 +9,7 @@
 # (.github/workflows/release.yml) — see docs/TECHNICAL.md §9.
 
 [workspace]
-members = ["protocol", "plugin", "helper", "tools/mock-host"]
+members = ["protocol", "uiruntime", "plugin", "helper", "tools/mock-host"]
 resolver = "2"
 
 [workspace.package]

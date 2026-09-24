@@ -519,15 +519,8 @@ name = "cfw-helper"
 version = "1.0.0"
 dependencies = [
  "cfw-protocol",
- "i-slint-backend-testing",
- "png",
- "pollster",
- "raw-window-handle",
- "serde",
+ "cfw-uiruntime",
  "serde_json",
- "slint",
- "slint-interpreter",
- "x11-dl",
 ]
 
 [[package]]
@@ -543,6 +536,7 @@ name = "cfw-plugin"
 version = "1.0.0"
 dependencies = [
  "cfw-protocol",
+ "cfw-uiruntime",
  "serde",
  "serde_json",
 ]
@@ -553,6 +547,22 @@ version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cfw-uiruntime"
+version = "1.0.0"
+dependencies = [
+ "cfw-protocol",
+ "i-slint-backend-testing",
+ "png",
+ "pollster",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "slint",
+ "slint-interpreter",
+ "x11-dl",
 ]
 
 [[package]]

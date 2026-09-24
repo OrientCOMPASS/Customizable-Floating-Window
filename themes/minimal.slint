@@ -18,8 +18,8 @@ export component MinimalDot inherits Window {
     // 最小交互契约
     callback mute-toggle();
     callback monitoring-toggle();
-    callback drag-start(float, float);
-    callback drag-move(float, float);
+    callback drag-start();
+    callback drag-move();
     callback drag-end();
 
     width: 34px; height: 34px;
@@ -92,7 +92,7 @@ export component MinimalDot inherits Window {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
                 root.pressing = true;
                 root.move-events = 0;
-                root.drag-start(self.mouse-x / 1px, self.mouse-y / 1px);
+                root.drag-start();
             } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
                 if (root.pressing) {
                     root.pressing = false;
@@ -110,7 +110,7 @@ export component MinimalDot inherits Window {
         moved => {
             if (root.pressing) {
                 root.move-events += 1;
-                root.drag-move(self.mouse-x / 1px, self.mouse-y / 1px);
+                root.drag-move();
             }
         }
     }

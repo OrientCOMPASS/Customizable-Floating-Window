@@ -39,8 +39,8 @@ export component FloatingRing inherits Window {
     callback monitoring-toggle();
     callback menu-action(string);
     callback hide-window();
-    callback drag-start(float, float);         // 按下：窗内鼠标坐标（逻辑 px）
-    callback drag-move(float, float);          // 移动中：窗内鼠标当前坐标
+    callback drag-start();                     // 按下（helper 起全局光标跟踪）
+    callback drag-move();                     // 移动中（moved 事件驱动）
     callback drag-end();
 
     // ── 主题外观（可自行修改） ─────────────────────────────────
@@ -185,7 +185,7 @@ export component FloatingRing inherits Window {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
                 root.pressing = true;
                 root.move-events = 0;
-                root.drag-start(self.mouse-x / 1px, self.mouse-y / 1px);
+                root.drag-start();
             } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
                 if (root.pressing) {
                     root.pressing = false;
@@ -203,7 +203,7 @@ export component FloatingRing inherits Window {
         moved => {
             if (root.pressing) {
                 root.move-events += 1;
-                root.drag-move(self.mouse-x / 1px, self.mouse-y / 1px);
+                root.drag-move();
             }
         }
     }

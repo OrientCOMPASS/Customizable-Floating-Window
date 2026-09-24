@@ -41,7 +41,23 @@
 **结论：方案成立，无需中止。** 两个工程化前提（helper 子进程、任务栏平台 FFI）
 均有干净解法，且交互逻辑仍 100% 由 `.slint` 定义。
 
-## 3. 总体架构
+## 3. 总体架构（round-5：双模 UI 运行时）
+
+**Windows / Linux**：Slint 事件循环跑在**插件进程内自建 UI 线程**（回退到用户验证过的
+“初版”架构）：宿主分发线程 ↔ UI 线程之间用两条无界通道传 `Cmd`/`Ev`；33ms UI 定时器
+drain 通道（用户参考实现的模式），无需 `invoke_from_event_loop` 跳转。
+**macOS**：winit/Slint 事件循环必须在进程主线程（被 Tauri 宿主占用）→ UI 跑在
+`floating_helper` 子进程，stdin/stdout 承载同一套 `Cmd`/`Ev`（`uiruntime` crate 双端复用）。
+zip 中 `bin/` 仅含 macOS helper；Windows/Linux 不需要 helper 二进制。
+
+```text
+host threads (init/tick/events) ──Cmd──▶ UI thread (Slint, in-process)   [win/linux]
+                             ◀──Ev──
+host threads ──stdin Cmd──▶ floating_helper (Slint on main thread)      [macOS]
+              ◀──stdout Ev──
+```
+
+## 3A. 历史架构（round 1–4，已被取代）
 
 ```text
 ┌────────────── MicYou 宿主进程 (Tauri) ──────────────┐
@@ -226,10 +242,12 @@ xdotool 一次性 warp（无中间 motion）正确判为点击，分步 motion �
 `background`）落实（X11 实测 depth=32 ARGB 证明创建路径正确）；helper 的后处理
 **只触碰 winit 内部管理之外的属性**（根因见 §7.8）：
 
-* **Windows**：**所有权法**——创建一个永不显示的 invisible tool popup 作为
-  owner，把悬浮窗 `GWLP_HWNDPARENT` 指向它。壳规则：owned 窗口无任务栏按钮、
-  无 Alt-Tab 条目（归组到 owner，而 owner 永不可见）。winit 从不读写
-  `GWLP_HWNDPARENT` → 对 winit 内部状态机零干扰、零 desync。
+* **Windows**：**用户验证配方**（UI 33ms 定时器内，HWND 缓存后一次性应用）：
+  剥 `GWL_STYLE` 的 caption/sysmenu/min/max/thickframe；`GWL_EXSTYLE` 加
+  `WS_EX_TOOLWINDOW|WS_EX_TOPMOST`、去 `WS_EX_APPWINDOW`；`SetWindowPos`
+  (`FRAMECHANGED|NOMOVE|NOSIZE|NOACTIVATE`)；此后每 30 tick 仅刷新 TOPMOST。
+  **绝不调用 `ShowWindow(SW_HIDE/SW_SHOW)`**（破坏 DWM 透明合成表面 + desync
+  winit 可见性，见 §7.8）；透明完全依赖 Slint 原生 `background: transparent`。
 * **X11**：`_NET_WM_STATE_SKIP_TASKBAR/_NET_WM_STATE_SKIP_PAGER`（WM 管理、
   持久）追加 + `_MOTIF_WM_HINTS` decorations=0（个别 CJK 壳 CSD 兜底）。
 * **macOS**：进程级 `NSApplicationActivationPolicyAccessory`（启动时 + show 后
@@ -378,6 +396,21 @@ E2E 交互断言因此放在 ring（自定义拖动，不依赖 WM）；pill 的
 **验证**：回退+所有权方案后 X11 E2E 全绿（拖动 1:1、单击静音、右键耳返、
 `_NET_WM_STATE_SKIP_TASKBAR` 在位、快照 84×84 正常、deinit 干净）。
 
+### 7.9 第五轮回滚：helper 子进程 → 进程内 UI 线程（用户实测驱动）
+
+**症状**（用户实测 round-4 构建）：悬浮窗不能互动；helper 隔一段时间崩溃。
+**处置**（按用户指示）：悬浮窗的解释运行**回退到初版架构**——Slint 事件循环跑在
+插件进程内自建线程（用户曾自证该架构在 Windows 不产生任务栏任务且可互动），并参考
+其粘贴实现落实 Windows 窗口配方（去帽/TOOLWINDOW/TOPMOST/无 hide-show/周期刷新
+TOPMOST）。跨进程 IPC、管道监督、owner-window 等 round 1–4 机制全部移除，失败面收敛
+为单进程双线程 + 通道；macOS 因主线程铁律保留子进程（`uiruntime` 双端复用同一运行时）。
+**经验**：跨进程 UI 带来的收益（崩溃隔离）不足以抵消其失败面（管道生命周期、监督重启、
+平台 flag 跨进程时序）；单进程线程模型 + `catch_unwind` 边界已足够，且与宿主线程契约
+兼容（Host API 仍只出现在宿主分发线程）。
+**回归验证**：Xvfb E2E 全绿——拖动 1:1（968/258）、单击静音、右键耳返、WDIS 注入、
+`_NET_WM_STATE_SKIP_TASKBAR` 在位、快照 84×84、deinit 干净；actionlint 零告警；
+windows-gnu / aarch64-apple-darwin 交叉 check 零告警。
+
 ## 8. 资源利用设计
 
 | 项 | 设计 |
@@ -408,11 +441,12 @@ E2E 交互断言因此放在 ring（自定义拖动，不依赖 WM）；pill 的
 ## 10. 打包与 CI（Focus-Capture 分发模型）
 
 * **push（main/dev）**：仅构建 + 发布 Actions artifact
-  `customizable-floating-window-development`——**artifact zip 根即安装包**
-  （打开就是插件目录，无嵌套 zip）；
-* **手动触发（workflow_dispatch）**：额外打 tag `v<plugin.json version>` 并发布
-  GitHub Release，资产为 `plugin.zip`（同一安装包）与 `plugin.json`
-  （update/市场 manifest，与 zip 内、仓库根为同一份 json）；
+  `opss.customizable-floating-window-v<ver>-development`（**名称带版本号**；
+  artifact zip 根即安装包，无嵌套 zip）；development 任务**不产生任何 release 资产**；
+* **手动触发（workflow_dispatch）**：与 development **平级**的任务（均 `needs: build`）：
+  bump 档位（none/patch/minor/major）→ 防重复发布检查 → 打包前回写版本化
+  `downloadUrl` → 版本化主包 `opss.customizable-floating-window-v<ver>.zip` →
+  tag `v<ver>` + Release（资产：版本化 zip + `plugin.json`，与 zip 内 manifest 同一份）；
 * 矩阵三平台（按项目决定**不含 macOS x86_64**）：windows-latest(MSVC x64) /
   ubuntu-latest(x64) / macos-latest(arm64)；步骤：actionlint → test → build →
   主题 compile-check → 归一化（unix 去 `lib` 前缀）→ package；

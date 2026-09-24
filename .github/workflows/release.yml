@@ -1,179 +1,254 @@
-# Release workflow — Focus-Capture distribution model.
-#
-#   push (main/dev)        → builds only; publishes the Actions artifact
-#                            `customizable-floating-window-development` whose
-#                            zip root IS the install bundle (open = plugin dir;
-#                            no nested zip).
-#   manual run (dispatch)  → additionally creates a GitHub Release tagged
-#                            v<version from plugin.json> with assets:
-#                              plugin.zip  (same bundle, installable)
-#                              plugin.json (update/market manifest — the very
-#                                           same json shipped inside the zip)
-#
-# The repo-root plugin.json is the single source of truth for install,
-# release (updateUrl → .../releases/latest/download/plugin.json) and the
-# marketplace entry (Focus-Capture model).
-#
-# Matrix: three desktop platforms (no macOS x86_64, per project decision).
-# Zip layout (root = plugin install dir):
-#   plugin.json, panel.html, LICENSE, README.md, themes/*.slint,
-#   customizable_floating_window.{dll,so,dylib}   (host auto-completes suffix)
-#   bin/floating-helper-{windows-x86_64.exe, linux-x86_64, macos-aarch64}
+name: Build & Release
 
-name: release
+# 操作手册（对标 Focus-Capture 分发模型）：
+#   * push 到 main / dev → 仅自动构建 development build：三平台矩阵编译 + 单测 +
+#     主题 compile-check，产物作为 Actions artifact
+#     `opss.customizable-floating-window-v<ver>-development`
+#     （zip 根即插件安装目录，无嵌套 zip），**绝不创建 release / tag**。
+#   * 发 release：Actions 页面 → Run workflow（workflow_dispatch），可选 bump
+#     档位（none/patch/minor/major，默认 none = 用 main 上 plugin.json 版本）。
+#     流程：三平台构建 → 打包 → 打 tag v<ver> → 创建 Release
+#     （资产：opss.customizable-floating-window-v<ver>.zip 主包 + plugin.json，
+#      与 zip 内 manifest 同一份，供手动市场 PR 与更新检查）。
+#     打包前回写版本化 downloadUrl ⇒ 三通道同一份 json。
+#   * 同版本重复发 release 直接失败（tag/ release 已存在），防误覆盖。
+#   * development 与 release 为平级任务（均 needs build），development 不产生
+#     任何 release 资产。
+#   * 矩阵三平台：windows x86_64 / linux x86_64 / macos aarch64（不含 mac x86_64）。
+#     macOS 因 winit 主线程约束额外携带 floating_helper 子进程二进制；
+#     Windows/Linux 的 UI 运行于插件进程内线程，无需 helper。
 
 on:
   push:
     branches: [main, dev]
   workflow_dispatch:
     inputs:
-      prerelease:
-        description: "Mark the release as prerelease"
-        required: false
-        default: "false"
+      bump:
+        description: "Release 版本档位：none = 使用 main 上 plugin.json 当前版本"
+        type: choice
+        default: none
+        options: [none, patch, minor, major]
+
+permissions:
+  contents: write
 
 env:
+  CARGO_TERM_COLOR: always
   PLUGIN_ID: opss.customizable-floating-window
 
 jobs:
   build:
+    name: 构建 ${{ matrix.label }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            helper: floating-helper-windows-x86_64.exe
-            libext: dll
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            helper: floating-helper-linux-x86_64
-            libext: so
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            helper: floating-helper-macos-aarch64
-            libext: dylib
+          - { label: windows-x86_64-msvc, os: windows-latest, artifact: customizable_floating_window.dll }
+          - { label: linux-x86_64, os: ubuntu-latest, artifact: customizable_floating_window.so,
+              apt: "libfontconfig1-dev pkg-config libx11-6 libxkbcommon0 libxkbcommon-x11-0" }
+          - { label: macos-aarch64, os: macos-latest, artifact: customizable_floating_window.dylib }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Rust toolchain
+      - name: 安装 Rust 工具链（原生）
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
-      - name: Linux system deps (Slint fontconfig build dep + X11 runtime libs)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libfontconfig1-dev pkg-config zip \
-            libx11-6 libxkbcommon0 libxkbcommon-x11-0
+      - name: 缓存 Cargo 依赖
+        uses: Swatinem/rust-cache@v2
 
-      - name: Workflow lint (actionlint)
+      - name: 安装系统依赖 (Linux)
+        if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Workflow 形式化检查 (actionlint, 仅 linux)
         if: runner.os == 'Linux'
         run: |
           curl -sSL https://github.com/rhysd/actionlint/releases/latest/download/actionlint_1.7.12_linux_amd64.tar.gz \
             | tar xz actionlint
           ./actionlint .github/workflows/release.yml
 
-      - name: Test (unit + theme contract)
-        run: cargo test --release --locked --target ${{ matrix.target }}
+      - name: 单元测试（含主题契约编译）
+        run: cargo test --release
 
-      - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Release 构建
+        run: cargo build --release
 
-      - name: Theme compile-check (headless, linux)
+      - name: 主题 compile-check（headless 工具，仅 linux）
         if: runner.os == 'Linux'
         run: |
           for t in themes/*.slint; do
-            ./target/${{ matrix.target }}/release/floating_helper --compile-check "$t"
+            ./target/release/floating_helper --compile-check "$t"
           done
 
-      - name: Normalize artifacts
+      - name: 归一化产物名（去 lib 前缀，宿主按平台补后缀）
         shell: bash
         run: |
           set -e
-          OUT=out
-          mkdir -p $OUT/bin
-          LIB=target/${{ matrix.target }}/release
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp $LIB/customizable_floating_window.${{ matrix.libext }} \
-               $OUT/customizable_floating_window.${{ matrix.libext }}
-            cp $LIB/floating_helper.exe $OUT/bin/${{ matrix.helper }}
-          else
-            # strip the unix lib prefix so the host's auto-extension works
-            cp $LIB/libcustomizable_floating_window.${{ matrix.libext }} \
-               $OUT/customizable_floating_window.${{ matrix.libext }}
-            cp $LIB/floating_helper $OUT/bin/${{ matrix.helper }}
-            chmod +x $OUT/bin/${{ matrix.helper }}
+          mkdir -p stage
+          case "${{ matrix.artifact }}" in
+            *.dylib) cp target/release/lib${{ matrix.artifact }} stage/${{ matrix.artifact }} ;;
+            *.so)    cp target/release/lib${{ matrix.artifact }} stage/${{ matrix.artifact }} ;;
+            *)       cp target/release/${{ matrix.artifact }} stage/ ;;
+          esac
+          # macOS 额外携带 helper 子进程二进制（winit 主线程约束）
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cp target/release/floating_helper stage/floating-helper-macos-aarch64
+            chmod +x stage/floating-helper-macos-aarch64
           fi
+          ls -la stage/
 
-      - uses: actions/upload-artifact@v4
+      - name: 上传平台产物
+        uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.target }}
-          path: out/
+          name: lib-${{ matrix.label }}
+          path: stage/
 
-  package:
-    needs: build
+  dev-package:
+    name: development 包（仅 push，带版本号）
+    if: github.event_name == 'push'
+    needs: [build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+
+      - name: 读取 manifest 版本号
+        id: ver
+        run: echo "version=$(python3 -c "import json;print(json.load(open('plugin.json'))['version'])")" >> "$GITHUB_OUTPUT"
+
+      - name: 下载三平台产物
+        uses: actions/download-artifact@v4
         with:
-          path: artifacts
-      - name: Assemble install bundle (zip root = plugin dir)
+          pattern: lib-*
+          path: libs
+          merge-multiple: true
+
+      - name: 扁平化产物（兼容 artifact 任意目录层级）
         run: |
-          set -e
-          ST=stage
-          rm -rf $ST && mkdir -p $ST/bin $ST/themes
-          # shared root files — plugin.json verbatim from the repo root
-          cp plugin.json panel.html LICENSE README.md $ST/
-          cp themes/*.slint $ST/themes/
-          for t in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu aarch64-apple-darwin; do
-            cp artifacts/build-$t/customizable_floating_window.* $ST/
-            cp artifacts/build-$t/bin/* $ST/bin/
-          done
-          ls -la $ST $ST/bin
-          # development artifact: the bundle directory itself (no nesting)
-          mkdir -p devartifact
-          cp -r $ST/* devartifact/
-          # release asset zip
-          ( cd $ST && zip -qr ../plugin.zip . )
-          mkdir -p rel
-          cp plugin.zip rel/plugin.zip
-          cp plugin.json rel/plugin.json
-      - uses: actions/upload-artifact@v4
+          mkdir -p libs_flat
+          find libs -type f | while read -r f; do cp "$f" "libs_flat/$(basename "$f")"; done
+          ls -la libs_flat/
+          test -f libs_flat/customizable_floating_window.dll
+          test -f libs_flat/customizable_floating_window.so
+          test -f libs_flat/customizable_floating_window.dylib
+          test -f libs_flat/floating-helper-macos-aarch64
+
+      - name: 组装插件包目录（根即 plugin.json，可直接安装/导入）
+        run: |
+          mkdir -p stage/bin stage/themes
+          cp plugin.json panel.html README.md LICENSE stage/
+          cp themes/*.slint stage/themes/
+          cp libs_flat/customizable_floating_window.dll \
+             libs_flat/customizable_floating_window.so \
+             libs_flat/customizable_floating_window.dylib stage/
+          cp libs_flat/floating-helper-macos-aarch64 stage/bin/
+          ls -la stage/ stage/bin/
+
+      # artifact zip 的根即包内容（upload-artifact 剥离公共父目录），
+      # 下载后无需解套、直接解压安装或应用内导入
+      - name: 上传 development artifact（名称带版本号）
+        uses: actions/upload-artifact@v4
         with:
-          name: customizable-floating-window-development
-          path: devartifact/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-assets
-          path: rel/
+          name: ${{ env.PLUGIN_ID }}-v${{ steps.ver.outputs.version }}-development
+          path: stage
 
   release:
+    name: 手动发布 Release
     if: github.event_name == 'workflow_dispatch'
-    needs: package
+    needs: [build]
     runs-on: ubuntu-latest
-    permissions: { contents: write }
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: { name: release-assets }
-      - name: Tag v<manifest version>
-        id: tag
-        run: |
-          V=$(python3 -c "import json;print(json.load(open('plugin.json'))['version'])")
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          git tag "v$V" || echo "tag exists — release will reuse it"
-          git push origin "v$V" || true
-      - name: Publish release (plugin.zip + same plugin.json as update manifest)
-        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.tag.outputs.version }}
-          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
-          files: |
-            plugin.zip
-            plugin.json
-          generate_release_notes: true
+          fetch-depth: 0
+
+      - name: 下载三平台产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lib-*
+          path: libs
+          merge-multiple: true
+
+      - name: 决定版本号（bump 档位 / 输出）
+        id: ver
+        run: |
+          python3 - <<'PY'
+          import json, os
+          p = 'plugin.json'
+          m = json.load(open(p))
+          maj, min_, pat = [int(x) for x in m['version'].split('.')]
+          bump = os.environ['BUMP']
+          if bump == 'patch':
+              pat += 1
+          elif bump == 'minor':
+              min_ += 1; pat = 0
+          elif bump == 'major':
+              maj += 1; min_ = 0; pat = 0
+          ver = f"{maj}.{min_}.{pat}"
+          m['version'] = ver
+          json.dump(m, open(p, 'w'), ensure_ascii=False, indent=2)
+          open(p, 'a').write("\n")
+          open(os.environ['GITHUB_OUTPUT'], 'a').write(f"version={ver}\n")
+          print("release version:", ver, f"(bump={bump})")
+          PY
+        env:
+          BUMP: ${{ github.event.inputs.bump }}
+
+      - name: 防止重复发布同版本
+        run: |
+          if gh release view "v${{ steps.ver.outputs.version }}" >/dev/null 2>&1; then
+            echo "::error::release v${{ steps.ver.outputs.version }} 已存在；请在 main 修改 plugin.json 版本或选择 bump 档位"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: 扁平化产物
+        run: |
+          mkdir -p libs_flat
+          find libs -type f | while read -r f; do cp "$f" "libs_flat/$(basename "$f")"; done
+          test -f libs_flat/customizable_floating_window.dll
+          test -f libs_flat/customizable_floating_window.so
+          test -f libs_flat/customizable_floating_window.dylib
+          test -f libs_flat/floating-helper-macos-aarch64
+
+      - name: 组装发布包（plugin.json 全通道同一份，回写版本化 downloadUrl）
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          python3 - <<PY
+          import json
+          m = json.load(open('plugin.json'))
+          m['downloadUrl'] = f"https://github.com/OrientCOMPASS/Customizable-Floating-Window/releases/download/v{m['version']}/${{ env.PLUGIN_ID }}-v{m['version']}.zip"
+          json.dump(m, open('plugin.json', 'w'), ensure_ascii=False, indent=2)
+          open('plugin.json', 'a').write("\n")
+          PY
+          mkdir -p stage/bin stage/themes dist
+          cp plugin.json panel.html README.md LICENSE stage/
+          cp themes/*.slint stage/themes/
+          cp libs_flat/customizable_floating_window.dll \
+             libs_flat/customizable_floating_window.so \
+             libs_flat/customizable_floating_window.dylib stage/
+          cp libs_flat/floating-helper-macos-aarch64 stage/bin/
+          (cd stage && zip -q -r ../dist/${{ env.PLUGIN_ID }}-v${VER}.zip .)
+          ls -la dist/
+
+      - name: 生成变更日志（自上一个 tag）
+        run: |
+          LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST" ]; then git log --oneline "$LAST..HEAD" > /tmp/notes.md; else git log --oneline -20 > /tmp/notes.md; fi
+          echo "" >> /tmp/notes.md
+          echo "三平台单包：windows x86_64 / linux x86_64 / macos aarch64（含 floating_helper 子进程）。release 的 plugin.json 资产可直接用于向 MicYou-Plugins 提手动市场 PR。" >> /tmp/notes.md
+
+      - name: 打 tag 并发布 Release
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          git config user.name "cfw-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git add plugin.json
+          git commit -m "chore(release): v${VER} [skip ci]" || true
+          git tag "v${VER}"
+          git push origin HEAD --tags || git push origin "v${VER}"
+          gh release create "v${VER}" "dist/${{ env.PLUGIN_ID }}-v${VER}.zip" plugin.json \
+            --title "v${VER}" --notes-file /tmp/notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}

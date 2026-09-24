@@ -166,8 +166,9 @@
     </div>
     <div class="row switch">
       <input type="checkbox" id="chkWdis" />
-      <label for="chkWdis" id="lblWdis" style="min-width:0">显示 WDIS 语音转录（WhatdidIsay 广播）</label>
+      <label for="chkWdis" id="lblWdis" style="min-width:0">显示语音转录气泡</label>
     </div>
+    <div class="hint" id="wdisExplain"></div>
     <div class="row">
       <label class="key" id="lblWdisHold">转录保持</label>
       <input type="range" id="rngWdisHold" min="1000" max="30000" step="500" />
@@ -350,7 +351,7 @@ function applyLocale() {
     ['hTheme','hTheme'],['hEditor','hEditor'],['hOpts','hOpts'],
     ['kName','kName'],['btnSave','save'],['btnLoadCur','loadCur'],
     ['lblVisible','lblVisible'],['lblTick','lblTick'],
-    ['lblWdis','lblWdis'],['lblWdisHold','lblWdisHold'],
+    ['lblWdis','lblWdis'],['lblWdisHold','lblWdisHold'],['wdisExplain','wdisExplain'],
     ['kStream','kStream'],['kLevel','kLevel'],['kMute','kMute'],['kMon','kMon'],
     ['kSession','kSession'],['kDev','kDev'],['kFmt','kFmt'],
     ['themeHint','themeHint'],['editorHint','editorHint'],['sumContract','sumContract'],
