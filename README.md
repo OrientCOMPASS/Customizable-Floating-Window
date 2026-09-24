@@ -3,7 +3,7 @@
 > A customizable floating window for MicYou status monitoring and control.
 
 用 **Slint 1.18** 运行时编译用户自定义的 `.slint` 主题文件，绘制一枚透明、无边框、
-置顶、**不占任务栏**的悬浮窗：实时展示 `audio.state` 数据与**本次连接时长**，
+置顶、不占任务栏的悬浮窗：实时展示 `audio.state` 数据与本次连接时长，
 左键单击切静音、拖动移窗、右键交互——全部交互在 `.slint` 主题内定义。
 
 <div align="center">
@@ -51,7 +51,7 @@ opss.customizable-floating-window/
   气泡、pill 为底部下伸面板，高度随文本自适应，定时收回；面板可调保持时长；
 * **设置面板**（设置 → 插件 → 「悬浮窗设置」）：
   * 实时状态（串流/电平/静音/耳返/本次连接时长/设备/格式）；
-  * 主题列表单选切换（**热替换**，不重启进程）、「热重载」、「恢复内置主题」、「位置复位」；
+  * 主题列表单选切换（热替换，不重启进程）、「热重载」、「恢复内置主题」、「位置复位」；
   * 在线 `.slint` 编辑器：保存即入列表；
   * 显示开关、刷新间隔（50–1000ms）。
 * 直接增删 `themes/*.slint` 文件也可以：列表约 5 秒内自动刷新。
@@ -60,7 +60,7 @@ opss.customizable-floating-window/
 
 ## 自定义主题（契约摘要）
 
-主题 = 一个导出 Window 组件的 `.slint` 文件，**所有契约成员可选**（helper 内省后只绑定存在的）：
+主题 = 一个导出 Window 组件的 `.slint` 文件，所有契约成员可选（helper 内省后只绑定存在的）：
 
 * 输入属性：`input-level` `processed-level` `smooth-level` `level-percent` `muted`
   `streaming` `monitoring` `sample-rate` `channels` `queued-ms` `session-seconds`

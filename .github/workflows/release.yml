@@ -252,16 +252,23 @@ jobs:
           echo "" >> /tmp/notes.md
           echo "三平台单包：windows x86_64 / linux x86_64 / macos aarch64（含 floating_helper 子进程）。release 的 plugin.json 资产可直接用于向 MicYou-Plugins 提手动市场 PR。" >> /tmp/notes.md
 
-      - name: 打 tag 并发布 Release
+      - name: 打 tag 并发布 Release（不产生 commit；身份仅用于 tag 对象）
         run: |
           VER="${{ steps.ver.outputs.version }}"
           git config user.name "cfw-ci"
           git config user.email "ci@users.noreply.github.com"
-          git add plugin.json
-          git commit -m "chore(release): v${VER} [skip ci]" || true
           git tag "v${VER}"
-          git push origin HEAD --tags || git push origin "v${VER}"
+          git push origin "v${VER}"
           gh release create "v${VER}" "dist/${{ env.PLUGIN_ID }}-v${VER}.zip" plugin.json \
             --title "v${VER}" --notes-file /tmp/notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: bump 回提交到 main（[skip ci]，仅 bump 档位时）
+        if: steps.ver.outputs.bumped == 'true'
+        run: |
+          git add plugin.json
+          git commit -m "chore(release): bump version to ${{ steps.ver.outputs.version }} [skip ci]"
+          git push origin HEAD:main
         env:
           GH_TOKEN: ${{ github.token }}
