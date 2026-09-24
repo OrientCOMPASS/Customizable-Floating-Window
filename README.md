@@ -13,7 +13,7 @@
 | 平台 | Windows 10+ (x86_64) · Linux X11/Wayland (x86_64) · macOS 11+ (arm64/x86_64) |
 | 插件类型 | `ui`（不进 DSP 链，不碰音频数据） |
 | 权限 | `audio.state` `control.observe` `control.intercept` `config.read` `config.write`（最小化） |
-| 许可 | Unlicense（公有领域） |
+| 许可 | GPL-3.0-only（Slint 经 GPLv3 路径使用；Slint © SixtyFPS GmbH） |
 
 ![themes](dist/shots/themes-sheet.png)
 *三个内置主题 × 三种状态（串流 / 静音 / 空闲），透明背景合成于深色桌面预览。*
@@ -120,4 +120,5 @@ tools/mock-host --plugin target/release/libcustomizable_floating_window.so \
 
 ## 许可
 
-Unlicense — 见 [LICENSE](LICENSE)。
+GPL-3.0-only — 见 [LICENSE](LICENSE)。Slint GUI  toolkit 经其 GPLv3 路径使用
+（Slint © SixtyFPS GmbH）；许可证选择缘由见 docs/TECHNICAL.md §11。

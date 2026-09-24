@@ -220,39 +220,22 @@ v3 全局光标跟踪（不需要 WindowMoveArea 即获系统级手感），pill
 `moved` 回调 <2 次 = 单击（切静音），≥2 次 = 拖动（`drag-end` 上报位置持久化）。
 xdotool 一次性 warp（无中间 motion）正确判为点击，分步 motion 正确判为拖动。
 
-### 5.4 “不占任务栏”与窗口标志：创建期 + 创建后双保险
+### 5.4 “不占任务栏”：只碰 winit 不管理的属性（第四轮回归后的最终设计）
 
-Slint/winit 在**窗口创建期**读取 window item（X11 实测 depth=32 ARGB +
-SKIP_TASKBAR 在位，证明解释器绑定先于创建求值）。但真实桌面仍有个别路径失效
-（Windows 任务栏按钮在 show 时创建、之后改 `WS_EX_TOOLWINDOW` 不生效；macOS winit
-初始化 NSApp 时把激活策略重置为 Regular）。故 helper 在 show 后的重试链里做
-**幂等后处理**：
+窗口装饰/透明由 winit 在**创建期**依据 `.slint` Window item（`no-frame`、
+`background`）落实（X11 实测 depth=32 ARGB 证明创建路径正确）；helper 的后处理
+**只触碰 winit 内部管理之外的属性**（根因见 §7.8）：
 
-* **Windows**：① `GWL_STYLE` 剥 `WS_CAPTION|WS_THICKFRAME|WS_SYSMENU|MIN/MAXBOX`
-  （防御性去框）；② `WS_EX_TOOLWINDOW`；③ **hide→show(SW_SHOWNOACTIVATE) 一次**
-  （仅当 exstyle 实际变化时；任务栏按钮只在 hide/show 后重建——启动期一次眨眼换
-  永久消失）；④ `DwmEnableBlurBehindWindow`(空区域) 保证逐像素透明（与 winit
-  `with_transparent` 同机制，幂等）。
-* **X11**：`_NET_WM_STATE_SKIP_TASKBAR/SKIP_PAGER` 追加 + `_MOTIF_WM_HINTS`
-  decorations=0（个别 CJK 桌面壳加 CSD 的兜底）。
-* **macOS**：NSWindow `setStyleMask:0`(borderless) + `setOpaque:NO` +
-  `backgroundColor=clearColor` + `setHasShadow:NO`；激活策略 Accessory 在
-  show 后 **10×500ms 重复断言**，压过 winit 的 Regular 重置。
-* **Wayland**：无客户端协议，no-op + 日志（合成器策略）。
-
-### 5.4 “不占任务栏”平台后处理（Slint 无此能力）
-
-show 后 150ms 起单shot 重试链（≤12 次，等窗口映射出句柄）：
-
-* **Windows**：`window_handle()`→HWND→`GWL_EXSTYLE |= WS_EX_TOOLWINDOW` +
-  `SetWindowPos(SWP_FRAMECHANGED…)`（顺带移出 Alt-Tab）；
-* **X11**：XlibWindowHandle→`XGetWindowProperty(_NET_WM_STATE)` **追加**
-  `_NET_WM_STATE_SKIP_TASKBAR`+`_NET_WM_STATE_SKIP_PAGER`（不覆写 WM 已置位，
-  如 ABOVE）→`XChangeProperty`+`XFlush`（x11-dl dlopen，无链接期依赖）；
-* **macOS**：`NSApplication setActivationPolicy:(Accessory)`（raw objc msgSend；
-  启动时 + show 后各断言一次——winit 初始化 NSApp 时会重置为 Regular）；
-  效果：无 Dock 图标/无 Cmd-Tab，窗口仍可交互；
-* **Wayland**：无客户端协议，no-op 并记日志（合成器策略；多数 Wayland 桌面无任务栏）。
+* **Windows**：**所有权法**——创建一个永不显示的 invisible tool popup 作为
+  owner，把悬浮窗 `GWLP_HWNDPARENT` 指向它。壳规则：owned 窗口无任务栏按钮、
+  无 Alt-Tab 条目（归组到 owner，而 owner 永不可见）。winit 从不读写
+  `GWLP_HWNDPARENT` → 对 winit 内部状态机零干扰、零 desync。
+* **X11**：`_NET_WM_STATE_SKIP_TASKBAR/_NET_WM_STATE_SKIP_PAGER`（WM 管理、
+  持久）追加 + `_MOTIF_WM_HINTS` decorations=0（个别 CJK 壳 CSD 兜底）。
+* **macOS**：进程级 `NSApplicationActivationPolicyAccessory`（启动时 + show 后
+  10×500ms 重复断言，压过 winit 初始化 NSApp 时的 Regular 重置）→ 无 Dock 图标 /
+  无 Cmd-Tab；**不动 NSWindow**（styleMask/opaque 等创建期属性交给 winit）。
+* **Wayland**：无客户端协议 → no-op + 日志（合成器策略）。
 
 ### 5.5 默认位置与多屏
 
@@ -371,6 +354,30 @@ v2 改窗内绝对坐标 + 锚点不变式后逐像素精确（E2E 968/258）。
 E2E 交互断言因此放在 ring（自定义拖动，不依赖 WM）；pill 的 WindowMoveArea
 在真实桌面正常。文档注明。
 
+### 7.8 第四轮 Windows 回归根因：与 winit 窗口状态机对抗（经验复盘）
+
+**症状**（用户实测）：热重载后悬浮窗先完整绘制一帧，随后只有互动过的组件重绘、
+其余变灰；标题栏重现；任务栏按钮仍在。
+
+**根因**：winit 在 Windows 上以内部 `WindowFlags` 为唯一事实来源，在可见性/装饰/
+最小化等变化时通过 `WindowFlags::apply` **重算并覆写** `GWL_STYLE`/`GWL_EXSTYLE`
+（含按可见性补 `WS_EX_APPWINDOW`）。第三轮的“修复”在创建后改这些位并做了
+`ShowWindow(SW_HIDE/SW_SHOWNOACTIVATE)` 循环：
+1. 绕开 winit 的 hide 使其内部可见性状态 desync → 停止整帧重绘，仅 damage 区域
+   （互动组件）重绘 → **灰色残帧**；
+2. 重新 show 触发 `apply` → 按 winit 内部状态重设装饰与 exstyle → **标题栏重现**、
+   我们加的 `WS_EX_TOOLWINDOW` 被清掉 → **任务栏按钮回归**。
+   （`DwmEnableBlurBehind` 重复调用与 `GWL_STYLE` 剥帽同样会被 apply 覆写。）
+
+**经验/规则**：
+* 创建后**禁止**修改 winit 拥有的窗口位（style/exstyle/可见性）；
+* 需要 shell 行为（任务栏/Alt-Tab）时，选 winit 不管理的维度：**ownership**
+  （`GWLP_HWNDPARENT`）、X11 的 WM 管理属性、macOS 的进程级激活策略；
+* 任何“生效一次”的后处理都要问：winit 下一次 apply 会不会覆写它？
+
+**验证**：回退+所有权方案后 X11 E2E 全绿（拖动 1:1、单击静音、右键耳返、
+`_NET_WM_STATE_SKIP_TASKBAR` 在位、快照 84×84 正常、deinit 干净）。
+
 ## 8. 资源利用设计
 
 | 项 | 设计 |
@@ -398,22 +405,34 @@ E2E 交互断言因此放在 ring（自定义拖动，不依赖 WM）；pill 的
 5. 交叉目标：`cargo check --target x86_64-pc-windows-gnu` 与
    `--target aarch64-apple-darwin`（CI 再做真构建）。
 
-## 10. 打包与 CI
+## 10. 打包与 CI（Focus-Capture 分发模型）
 
-* 单 zip 跨平台（沿用 Focus-Capture 模式）：三 cdylib 同名去 `lib` 前缀
-  （宿主按平台补后缀）+ `bin/floating-helper-{os}-{arch}[.exe]` + 清单/面板/主题；
-* CI 矩阵（按用户要求**不含 macOS x86_64**）：windows-latest(MSVC x64) /
-  ubuntu-latest(x64) / macos-latest(arm64)；步骤：test → build → 主题 compile-check
-  → 归一化 → package 组装**单一 plugin.zip**；tag 触发 Release；
-* **单一 manifest**（Focus-Capture 模型）：仓库根 `plugin.json` 同时是 zip 内安装清单、Release 资产
-  （`updateUrl` → `.../releases/latest/download/plugin.json`）与市场条目来源
-  （Focus-Capture 分发模型）；`repository/homepage/readmeUrl` 指向
-  `OrientCOMPASS/Customizable-Floating-Window`。
+* **push（main/dev）**：仅构建 + 发布 Actions artifact
+  `customizable-floating-window-development`——**artifact zip 根即安装包**
+  （打开就是插件目录，无嵌套 zip）；
+* **手动触发（workflow_dispatch）**：额外打 tag `v<plugin.json version>` 并发布
+  GitHub Release，资产为 `plugin.zip`（同一安装包）与 `plugin.json`
+  （update/市场 manifest，与 zip 内、仓库根为同一份 json）；
+* 矩阵三平台（按项目决定**不含 macOS x86_64**）：windows-latest(MSVC x64) /
+  ubuntu-latest(x64) / macos-latest(arm64)；步骤：actionlint → test → build →
+  主题 compile-check → 归一化（unix 去 `lib` 前缀）→ package；
+* **workflow 形式化检查**：CI 内运行 `actionlint`（GitHub Actions 专用静态检查器）；
+  第三轮 `${{ matrix.libname##*. }}`（bash 参数展开混入 Actions 表达式）即此类
+  工具可抓的典型错误，已改为显式 `libext` 矩阵字段；
+* 本地开发包：`scripts/package.sh`（PROFILE=sandbox 适用于 ≤1GB 内存容器；
+  release profile 的 `codegen-units=1` 在大内存机器/CI 上构建）。
 
-> 内存说明：release profile（`codegen-units=1` + LTO）在 ≤1 GB 内存的容器里
-> 编译 `x11rb-protocol` 会被 OOM-kill（与本插件代码无关）。本地小内存环境用
-> `--profile sandbox`（同源码、更保守的代码生成）或 mingw 交叉构建；
-> 正式 release 产物由 CI 的大内存 runner 产出。
+## 11. 许可证：GPL-3.0-only（Slint 许可证查证结论）
+
+Slint 采用三选一许可（README/LICENSES）：① Royalty-free（面向**闭源**桌面/移动/Web
+应用，条件含 AboutSlint 署名，且**禁止分发“暴露 Slint API”的应用**、禁止单独分发
+Slint）；② **GPLv3**（面向开源应用）；③ 商业许可。
+
+本项目情形：开源、随 MicYou（GPLv3+插件例外）生态分发、且**把 .slint 编写能力暴露
+给终端用户**（主题契约 = 暴露 Slint 语言/API）→ Royalty-free 路径不适用/高风险；
+免费且契合的路径即 **GPLv3**。故仓库许可由 Unlicense 改为 **GPL-3.0-only**
+（LICENSE 全文、manifest `license` 字段、workspace Cargo `license`），并与
+MicYou 市场“GPL 兼容”准入一致。Slint © SixtyFPS GmbH，经 GPLv3 路径使用。
 
 ## 11. 源码地图
 

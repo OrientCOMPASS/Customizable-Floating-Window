@@ -1,15 +1,20 @@
-# Release workflow — three desktop platforms, ONE cross-platform plugin.zip.
+# Release workflow — Focus-Capture distribution model.
 #
-# The repo-root plugin.json is the single source of truth: the same file is
-#   · shipped inside plugin.zip (install manifest),
-#   · uploaded as a release asset (update manifest: manifest.updateUrl points
-#     at .../releases/latest/download/plugin.json),
-#   · PR'd to the MicYou marketplace index (market entry).
-# (Focus-Capture distribution model.)
+#   push (main/dev)        → builds only; publishes the Actions artifact
+#                            `customizable-floating-window-development` whose
+#                            zip root IS the install bundle (open = plugin dir;
+#                            no nested zip).
+#   manual run (dispatch)  → additionally creates a GitHub Release tagged
+#                            v<version from plugin.json> with assets:
+#                              plugin.zip  (same bundle, installable)
+#                              plugin.json (update/market manifest — the very
+#                                           same json shipped inside the zip)
 #
-# push (main/dev) → development artifact only (no release/tag)
-# tag  v*         → GitHub Release with plugin.zip + plugin.json
+# The repo-root plugin.json is the single source of truth for install,
+# release (updateUrl → .../releases/latest/download/plugin.json) and the
+# marketplace entry (Focus-Capture model).
 #
+# Matrix: three desktop platforms (no macOS x86_64, per project decision).
 # Zip layout (root = plugin install dir):
 #   plugin.json, panel.html, LICENSE, README.md, themes/*.slint,
 #   customizable_floating_window.{dll,so,dylib}   (host auto-completes suffix)
@@ -20,8 +25,12 @@ name: release
 on:
   push:
     branches: [main, dev]
-    tags: ["v*"]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Mark the release as prerelease"
+        required: false
+        default: "false"
 
 env:
   PLUGIN_ID: opss.customizable-floating-window
@@ -35,17 +44,14 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             helper: floating-helper-windows-x86_64.exe
-            libname: customizable_floating_window.dll
             libext: dll
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             helper: floating-helper-linux-x86_64
-            libname: customizable_floating_window.so
             libext: so
           - os: macos-latest
             target: aarch64-apple-darwin
             helper: floating-helper-macos-aarch64
-            libname: customizable_floating_window.dylib
             libext: dylib
     runs-on: ${{ matrix.os }}
     steps:
@@ -63,6 +69,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libfontconfig1-dev pkg-config zip \
             libx11-6 libxkbcommon0 libxkbcommon-x11-0
+
+      - name: Workflow lint (actionlint)
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSL https://github.com/rhysd/actionlint/releases/latest/download/actionlint_1.7.12_linux_amd64.tar.gz \
+            | tar xz actionlint
+          ./actionlint .github/workflows/release.yml
 
       - name: Test (unit + theme contract)
         run: cargo test --release --locked --target ${{ matrix.target }}
@@ -82,16 +95,16 @@ jobs:
         run: |
           set -e
           OUT=out
-          mkdir -p $OUT/bin $OUT/themes
+          mkdir -p $OUT/bin
           LIB=target/${{ matrix.target }}/release
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp $LIB/customizable_floating_window.${{ matrix.libext }} \
-               $OUT/${{ matrix.libname }}
+               $OUT/customizable_floating_window.${{ matrix.libext }}
             cp $LIB/floating_helper.exe $OUT/bin/${{ matrix.helper }}
           else
             # strip the unix lib prefix so the host's auto-extension works
             cp $LIB/libcustomizable_floating_window.${{ matrix.libext }} \
-               $OUT/${{ matrix.libname }}
+               $OUT/customizable_floating_window.${{ matrix.libext }}
             cp $LIB/floating_helper $OUT/bin/${{ matrix.helper }}
             chmod +x $OUT/bin/${{ matrix.helper }}
           fi
@@ -109,7 +122,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Assemble plugin.zip (single json for install/release/market)
+      - name: Assemble install bundle (zip root = plugin dir)
         run: |
           set -e
           ST=stage
@@ -117,35 +130,49 @@ jobs:
           # shared root files — plugin.json verbatim from the repo root
           cp plugin.json panel.html LICENSE README.md $ST/
           cp themes/*.slint $ST/themes/
-          # per-platform binaries
           for t in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu aarch64-apple-darwin; do
-            cp artifacts/build-$t/customizable_floating_window.* $ST/ 2>/dev/null || true
+            cp artifacts/build-$t/customizable_floating_window.* $ST/
             cp artifacts/build-$t/bin/* $ST/bin/
           done
           ls -la $ST $ST/bin
+          # development artifact: the bundle directory itself (no nesting)
+          mkdir -p devartifact
+          cp -r $ST/* devartifact/
+          # release asset zip
           ( cd $ST && zip -qr ../plugin.zip . )
-          # release/market manifest = the very same json, asset-named
           mkdir -p rel
           cp plugin.zip rel/plugin.zip
           cp plugin.json rel/plugin.json
       - uses: actions/upload-artifact@v4
         with:
-          name: plugin-package
+          name: customizable-floating-window-development
+          path: devartifact/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
           path: rel/
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch'
     needs: package
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { name: plugin-package }
-      # plugin.zip = install bundle; plugin.json = update/market manifest
-      # (identical to the json inside the zip and at the repo root).
-      - name: Publish
+        with: { name: release-assets }
+      - name: Tag v<manifest version>
+        id: tag
+        run: |
+          V=$(python3 -c "import json;print(json.load(open('plugin.json'))['version'])")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          git tag "v$V" || echo "tag exists — release will reuse it"
+          git push origin "v$V" || true
+      - name: Publish release (plugin.zip + same plugin.json as update manifest)
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.tag.outputs.version }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
           files: |
             plugin.zip
             plugin.json

@@ -12,7 +12,7 @@
     "zh-CN": "可自定义悬浮窗",
     "en": "Customizable Floating Window"
   },
-  "license": "Unlicense",
+  "license": "GPL-3.0-only",
   "runtime": "native",
   "entry": "customizable_floating_window",
   "platforms": [

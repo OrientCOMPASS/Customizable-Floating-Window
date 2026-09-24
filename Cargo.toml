@@ -17,7 +17,7 @@ version = "1.0.0"
 edition = "2021"
 # Slint 1.18 requires rustc >= 1.95, so that is the MSRV of this workspace.
 rust-version = "1.95"
-license = "Unlicense"
+license = "GPL-3.0-only"
 publish = false
 
 [workspace.dependencies]
