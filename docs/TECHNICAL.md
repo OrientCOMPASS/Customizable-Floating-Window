@@ -189,8 +189,9 @@ helper 侧：`drag-start` 记录 `window().position()`+`scale_factor`；
 
 show 后 150ms 起单shot 重试链（≤12 次，等窗口映射出句柄）：
 
-* **Windows**：`window_handle()`→HWND→`GWL_EXSTYLE |= WS_EX_TOOLWINDOW` +
-  `SetWindowPos(SWP_FRAMECHANGED…)`（顺带移出 Alt-Tab）；
+* **Windows**：`ITaskbarList::DeleteTab(hwnd)` + `WS_EX_TOOLWINDOW`/¬`WS_EX_APPWINDOW`
+  （show 后首应用 + 1Hz 重申；winit 自身机制，详见 §13——早期的纯 exstyle 做法
+  被证明结构性无效）；
 * **X11**：XlibWindowHandle→`XGetWindowProperty(_NET_WM_STATE)` **追加**
   `_NET_WM_STATE_SKIP_TASKBAR`+`_NET_WM_STATE_SKIP_PAGER`（不覆写 WM 已置位，
   如 ABOVE）→`XChangeProperty`+`XFlush`（x11-dl dlopen，无链接期依赖）；
@@ -218,9 +219,10 @@ show 后 150ms 起单shot 重试链（≤12 次，等窗口映射出句柄）：
 
 属性：`input-level processed-level smooth-level level-percent muted streaming
 monitoring sample-rate channels queued-ms session-seconds session-text
-device-label device-mode info-text arc-path bars-path`
+device-label device-mode info-text arc-path bars-path wdis-text wdis-visible`
 回调：`mute-toggle() monitoring-toggle() menu-action(string) hide-window()
-drag-start() drag-move(float,float) drag-end()`
+drag-start() drag-move() drag-end()`（drag 三回调无参：helper 侧全局光标增量跟踪，
+密集鼠标事件下仍 1:1；见 §12.3）
 
 ### 6.2 `ring.slint` ↔ v1 `FloatingMicWindow` 对照
 
@@ -305,12 +307,18 @@ E2E 交互断言因此放在 ring（自定义拖动，不依赖 WM）；pill 的
 
 ## 10. 打包与 CI
 
-* 单 zip 跨平台（沿用 Focus-Capture 模式）：三 cdylib 同名去 `lib` 前缀
-  （宿主按平台补后缀）+ `bin/floating-helper-{os}-{arch}[.exe]` + 清单/面板/主题；
-* CI 矩阵：windows-latest(MSVC) / ubuntu-latest(+libfontconfig1-dev 等) /
-  macos-latest(arm64+x86_64)；步骤：test → build → 归一化 → zip → artifact；
-  tag 触发 Release（plugin.zip + plugin.json 快照）；
-* `updateUrl/readmeUrl` 留空（未绑定发布仓库时不写死链接）。
+* 单 zip 跨平台（Focus-Capture 模式）：三 cdylib 同名去 `lib` 前缀（宿主按平台补
+  后缀）+ `bin/floating-helper-{windows-x86_64.exe, linux-x86_64, macos-aarch64}`
+  + 清单/面板/主题；
+* CI 矩阵：windows-latest(MSVC x64) / ubuntu-latest(x64, +libfontconfig1-dev 等) /
+  macos-latest(arm64)；步骤：actionlint → test → build → 主题 compile-check →
+  归一化 → 组装；
+* **push** → development artifact `opss.customizable-floating-window-v<ver>-development`
+  （zip 根即安装目录；不产生 release 资产）；**workflow_dispatch** → release 任务
+  （bump 档位/防重复/回写版本化 downloadUrl/版本化 zip + plugin.json/tag/变更日志）；
+* `plugin.json` 为安装/发布/市场同一份 manifest：`repository`/`homepage`/`updateUrl`
+  （→ `…/releases/latest/download/plugin.json`）/`readmeUrl` 已指向
+  `OrientCOMPASS/Customizable-Floating-Window`。
 
 > 内存说明：release profile（`codegen-units=1` + LTO）在 ≤1 GB 内存的容器里
 > 编译 `x11rb-protocol` 会被 OOM-kill（与本插件代码无关）。本地小内存环境用

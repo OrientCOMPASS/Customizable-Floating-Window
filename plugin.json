@@ -1,6 +1,6 @@
 {
   "id": "opss.customizable-floating-window",
-  "name": "可自定义悬浮窗",
+  "name": "Customizable Floating Window",
   "version": "1.0.0",
   "description": "A customizable floating window for MicYou status monitoring and control.",
   "descriptionI18n": {
@@ -12,7 +12,7 @@
     "zh-CN": "可自定义悬浮窗",
     "en": "Customizable Floating Window"
   },
-  "license": "Unlicense",
+  "license": "GPL-3.0-only",
   "runtime": "native",
   "entry": "customizable_floating_window",
   "platforms": [
@@ -109,5 +109,9 @@
         "default": 4000
       }
     ]
-  }
+  },
+  "repository": "https://github.com/OrientCOMPASS/Customizable-Floating-Window",
+  "homepage": "https://github.com/OrientCOMPASS/Customizable-Floating-Window",
+  "updateUrl": "https://github.com/OrientCOMPASS/Customizable-Floating-Window/releases/latest/download/plugin.json",
+  "readmeUrl": "https://raw.githubusercontent.com/OrientCOMPASS/Customizable-Floating-Window/refs/heads/main/README.md"
 }
