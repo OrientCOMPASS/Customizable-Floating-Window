@@ -57,8 +57,8 @@ export component FloatingPill inherits Window {
     property <float> lvl: min(1, max(0, smooth-level));
     property <float> pulse: 1;
     property <bool> blink: true;
-    // WDIS 下伸面板高度（伸出/收回动画）
-    property <length> box-h: wdis-visible ? 34px : 0px;
+    // WDIS 展示区高度 = 文本实际需要高度 + 分隔与内边距（伸出/收回动画）
+    property <length> box-h: wdis-visible ? (wtxt.preferred-height + 18px) : 0px;
     animate box-h { duration: 240ms; easing: ease; }
 
     Timer {
@@ -100,25 +100,27 @@ export component FloatingPill inherits Window {
         // 系统级拖动区（内容元素不拦截左键处均可拖动）
         WindowMoveArea { width: 100%; height: 100%; }
 
-        // ── WDIS 转录下伸面板（从下方伸出，一段时间后收回） ──
+        // ── WDIS 转录区：卡片内下方，分隔线 + 内边距，高度随文本自适应 ──
         Rectangle {
-            x: 0px; y: 56px;
-            width: parent.width; height: root.box-h;
-            background: #101216f0;
-            clip: true;
-            Text {
-                x: 12px; y: 6px;
-                width: parent.width - 24px; height: parent.height - 10px;
-                text: root.wdis-text;
-                color: #e8eaed;
-                font-size: 11px;
-                wrap: word-wrap;
-                overflow: elide;
-                vertical-alignment: top;
-            }
+            x: 12px; y: 56px;
+            width: parent.width - 24px; height: 1px;
+            background: #ffffff2e;
+            opacity: root.wdis-visible ? 1 : 0;
+        }
+        wtxt := Text {
+            x: 12px; y: 61px;
+            width: parent.width - 24px;
+            text: root.wdis-text;
+            color: #e8eaed;
+            font-size: 11px;
+            wrap: word-wrap;
+            opacity: root.wdis-visible ? 1 : 0;
         }
 
         HorizontalLayout {
+            // 主栏固定 56px 高：窗口因 WDIS 区生长时布局不随之铺满
+            x: 0px; y: 0px;
+            width: parent.width; height: 56px;
             padding-left: 12px; padding-right: 8px;
             spacing: 10px;
             alignment: stretch;

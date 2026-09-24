@@ -22,8 +22,20 @@
     border-radius: 14px; padding: 14px 16px; margin-bottom: 14px;
   }
   .card h3 { margin: 0 0 10px; font-size: 14px; }
-  .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; flex-wrap: wrap; }
   .row label { flex: none; min-width: 76px; color: hsl(var(--on-surface-variant)); }
+  .row > .hint { flex-basis: 100%; min-width: 0; margin: 2px 0 0; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 0; }
+  .hint { min-width: 0; overflow-wrap: anywhere; }
+  code { overflow-wrap: anywhere; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .pathbox { margin-top: 8px; font-size: 12px; color: hsl(var(--on-surface-variant)); overflow-wrap: anywhere; }
+  .ai-tip {
+    border: 1px dashed hsl(var(--primary)); border-radius: 12px;
+    padding: 10px 12px; font-size: 12.5px; background: hsl(var(--primary) / .06);
+    margin: 10px 0 0;
+  }
+  .ai-tip b { color: hsl(var(--primary)); }
   button {
     border: 1px solid hsl(var(--outline)); background: hsl(var(--surface-bright));
     color: hsl(var(--on-surface)); padding: 7px 14px; border-radius: 999px;
@@ -104,7 +116,7 @@
   <div class="card">
     <h3 id="hTheme">主题（.slint）</h3>
     <div class="themes" id="themeList"></div>
-    <div class="row">
+    <div class="actions">
       <button class="primary" id="btnApply"></button>
       <button id="btnReload"></button>
       <button id="btnRestore"></button>
@@ -120,10 +132,17 @@
       <input type="text" id="themeName" placeholder="my-theme.slint" style="flex:1" />
     </div>
     <textarea id="themeSrc" spellcheck="false"></textarea>
-    <div class="row">
+    <div class="actions">
       <button class="primary" id="btnSave"></button>
       <button id="btnLoadCur"></button>
-      <span class="hint" id="editorHint" style="margin:0"></span>
+    </div>
+    <div class="hint" id="editorHint"></div>
+    <div class="ai-tip">
+      <b id="aiTipTitle"></b>
+      <span id="aiTipBody"></span>
+      <div class="pathbox">
+        <span id="pathLabel"></span><code id="themesDir">…</code>
+      </div>
     </div>
     <details>
       <summary id="sumContract">主题契约（可用属性 / 回调）</summary>
@@ -183,6 +202,10 @@ const STR = {
     kName: '文件名', save: '保存为新主题', loadCur: '载入所选主题到编辑器',
     lblVisible: '显示悬浮窗', lblTick: '刷新间隔',
     lblWdis: '显示语音转录气泡', lblWdisHold: '转录保持',
+    aiTipTitle: '优先使用 AI / LLM 修改主题。',
+    aiTipBody: ' .slint 是声明式 UI 语言：把目标主题文件与下方「主题契约」一起交给 AI 助手（或直接用文本编辑器）修改，保存后点「热重载当前主题」即可生效，无需重启 MicYou。',
+    pathLabel: '主题文件目录：',
+    editHint: '直接增删该目录下 .slint 文件亦可：主题列表约 5 秒内自动刷新；在线编辑器仅适合快速微调。',
     wdisExplain: '语音转录来自 MicYou 插件 WhatdidIsay（本地离线识别）。它每识别完一句话，会通过其广播协议（魔数为 “WDIS” 的二进制帧，经宿主消息总线广播）推送识别文本；开启后悬浮窗会在下方短暂展示该文本（ring 为直径宽文本框渐变消失，pill 为底部下伸面板收回）。',
     kStream: '串流', kLevel: '输入电平', kMute: '静音', kMon: '耳返',
     kSession: '本次连接', kDev: '设备', kFmt: '格式',
@@ -201,6 +224,10 @@ const STR = {
     kName: 'File name', save: 'Save as new theme', loadCur: 'Load selected into editor',
     lblVisible: 'Show floating window', lblTick: 'Refresh interval',
     lblWdis: 'Show speech transcript bubbles', lblWdisHold: 'Transcript hold',
+    aiTipTitle: 'Prefer an AI / LLM for theme edits.',
+    aiTipBody: ' .slint is a declarative UI language: hand the target theme file plus the contract below to your AI assistant (or edit it in any text editor), save, then press “Hot-reload theme” — no MicYou restart needed.',
+    pathLabel: 'Theme directory: ',
+    editHint: 'Adding/removing .slint files in that directory works too (list refreshes within ~5 s); the in-panel editor is for quick tweaks only.',
     wdisExplain: 'Transcripts come from the MicYou plugin WhatdidIsay (fully local, offline speech recognition). After each finished sentence it broadcasts the text via its broadcast protocol (binary frames with magic "WDIS" over the host message bus); when enabled, the floating window briefly shows the text (ring: diameter-wide box that fades out; pill: slide-down panel).',
     kStream: 'Streaming', kLevel: 'Input level', kMute: 'Muted', kMon: 'Monitoring',
     kSession: 'Session', kDev: 'Device', kFmt: 'Format',
@@ -328,6 +355,10 @@ function applyLocale() {
   $('btnLoadCur').textContent = t('loadCur');
   $('lblVisible').textContent = t('lblVisible');
   $('lblTick').textContent = t('lblTick');
+  $('aiTipTitle').textContent = t('aiTipTitle');
+  $('aiTipBody').textContent = t('aiTipBody');
+  $('pathLabel').textContent = t('pathLabel');
+  $('editorHint').textContent = t('editHint');
   $('kStream').textContent = t('kStream');
   $('kLevel').textContent = t('kLevel');
   $('kMute').textContent = t('kMute');

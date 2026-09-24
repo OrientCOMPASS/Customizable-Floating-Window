@@ -60,8 +60,9 @@ export component FloatingRing inherits Window {
     background: transparent;
     title: "MicYou";
 
-    // WDIS 展示区高度（伸出/收回动画）与透明度（渐变消失）
-    property <length> box-h: wdis-visible ? 40px : 0px;
+    // WDIS 展示区高度 = 文本实际需要高度（preferred-height 驱动）+
+    // 内边距与间隙；伸出/收回动画；渐变消失
+    property <length> box-h: wdis-visible ? (wtxt.preferred-height + 16px) : 0px;
     property <float> box-alpha: wdis-visible ? 1 : 0;
     animate box-h { duration: 260ms; easing: ease; }
     animate box-alpha { duration: 420ms; easing: ease; }
@@ -156,23 +157,24 @@ export component FloatingRing inherits Window {
         opacity: root.muted ? 1 : 0;
     }
 
-    // ── WDIS 转录展示区：宽 = 直径，下方伸出，渐变消失 ──
+    // ── WDIS 转录展示区：宽 = 直径、高 = 文本需要高度；
+    //    明亮轻盈风格（白底深字 + 状态色描边），与圆环的通透感一致 ──
     Rectangle {
-        x: 0px; y: root.win;
-        width: root.win; height: root.box-h;
-        border-radius: 10px;
-        background: #16181d;
-        opacity: root.box-alpha * 0.92;
+        x: 0px; y: root.win + 4px;
+        width: root.win; height: root.box-h > 4px ? root.box-h - 4px : 0px;
+        border-radius: 12px;
+        background: #ffffffeb;
+        border-width: 1px;
+        border-color: root.content.with-alpha(0.35);
+        opacity: root.box-alpha;
         clip: true;
-        Text {
-            x: 6px; y: 4px;
-            width: parent.width - 12px; height: parent.height - 8px;
+        wtxt := Text {
+            x: 8px; y: 6px;
+            width: parent.width - 16px;
             text: root.wdis-text;
-            color: #e8eaed;
+            color: #1f2328;
             font-size: 10px;
             wrap: word-wrap;
-            overflow: elide;
-            vertical-alignment: top;
         }
     }
 

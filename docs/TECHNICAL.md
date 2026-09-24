@@ -394,3 +394,20 @@ tools/mock-host/           宿主 ABI 镜像 E2E 台（含 interval 泵/事件�
 右键耳返、WDIS 注入、`_NET_WM_STATE_SKIP_TASKBAR` 在位、selftest 快照 84×124、
 deinit 干净；`x86_64-pc-windows-gnu` 交叉构建通过；actionlint 零告警；
 `dist/plugin-linux+windows.zip`（macOS 产物由 CI 出）。
+
+### 12.5 Round-8：WDIS 文本区视觉重做 + panel 排版修复（用户实测反馈）
+
+* **高度自适应**：两主题文本区高度改由 `Text.preferred-height` 驱动
+  （`box-h = wdis-visible ? (wtxt.preferred-height + pad) : 0px`，`animate` 伸出/收回），
+  文本长短决定窗口生长量——取代固定 40/34px；
+* **ring 风格匹配**：深色底浅字 → **白底深字 + 状态色描边圆角气泡**（`#ffffffeb` +
+  `content.with-alpha(0.35)` 描边），与圆环的明亮轻盈一致（浅色桌面合成预览见
+  `dist/shots/wdis-light-preview.png`）；
+* **pill 结构修复**：主栏 `HorizontalLayout` 固定 `height: 56px`（否则窗口生长时布局
+  铺满全窗与文本重叠——用户截图的“灾难”根因）；转录区改为卡片内**分隔线 + 内边距**
+  的统一圆角卡片结构（`dist/shots/pill-wdis-light.png`）；
+* **panel.html 排版修复**：`.row` 增加 `flex-wrap: wrap`；hint 文本独立成块
+  （`flex-basis: 100%`，不再被挤进按钮行成竖排）；按钮组改 `.actions` 换行容器；
+  `code/pre` 增加 `overflow-wrap: anywhere`；「优先使用 AI/LLM 修改主题」说明块
+  （含主题目录路径）置于编辑器卡片内、主题契约折叠区上一行；中英本地化键补齐
+  （aiTipTitle/aiTipBody/pathLabel/editHint/lblWdis/lblWdisHold/wdisExplain）。
