@@ -150,8 +150,13 @@ export component FloatingRing inherits Window {
     }
 
     // ── 中心电量：手机上报时取代中心电平图案（静音时让位给静音斜杠） ──
-    //    图标 + 百分比：只写数字用户看不出是电量；低电红、充电绿、其余跟随状态色
-    property <color> bat-color: root.battery-level <= 20 ? root.error : (root.battery-charging ? root.mon : root.content);
+    //    图标 + 百分比：只写数字用户看不出是电量
+    //    配色跟内圈淡蓝环同源：accent 降透明度（0.45 ≈ 环的淡蓝观感），
+    //    低电 / 充电只换色相，不换饱和度，保持整体轻盈
+    property <float> bat-alpha: 0.45;
+    property <color> bat-hue: root.battery-level <= 20 ? root.error
+        : (root.battery-charging ? root.mon : root.accent);
+    property <color> bat-color: root.bat-hue.with-alpha(root.bat-alpha);
     property <float> bat-fill: min(1.0, max(0.0, root.battery-level * 1.0 / 100.0));
 
     VerticalLayout {
