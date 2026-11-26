@@ -61,7 +61,10 @@ export component FloatingPill inherits Window {
     property <color> content: muted ? error : (streaming ? accent : idle);
     property <color> dot: muted ? error : (streaming ? ok : idle);
     // 电量徽标：低电红、充电绿、其余中性灰
-    property <color> bat-color: root.battery-level <= 20 ? root.error : (root.battery-charging ? root.ok : #9aa0a6);
+    // 电量徽标配色：低电红、充电绿，其余沿用中性灰（保留 pill 原有的克制风格；
+    // 淡蓝那套只给 ring 的中心使用）
+    property <color> bat-color: root.battery-level <= 20 ? root.error
+        : (root.battery-charging ? root.ok : #9aa0a6);
     property <float> bat-fill: min(1.0, max(0.0, root.battery-level * 1.0 / 100.0));
     property <float> lvl: min(1, max(0, smooth-level));
     property <float> pulse: 1;
