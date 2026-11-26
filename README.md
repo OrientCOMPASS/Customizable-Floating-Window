@@ -67,6 +67,9 @@ opss.customizable-floating-window/
   `session-text` `device-label` `device-mode` `info-text` `arc-path` `bars-path`
 * 输入属性（电量，手机上报时才有）：`battery-visible` `battery-level` `battery-charging`
   `battery-text`（helper 预格式化的 `"78%"`；`ring` 中心与 `pill` 信息行默认展示）
+  * `ring`：中心以「电池图标 + 百分比」取代电平图案；**静音时不显示电量**（让位给静音斜杠）
+  * `pill`：信息行右侧电量徽标（图标 + 百分比），窗口宽度随 `battery-visible` 从 224px 自适应到 248px，不挤压时长/设备名
+  * 低电（≤20%）红、充电绿、其余跟随状态色
 * 输入属性（转录）：`wdis-text` `wdis-visible`
 * 输出回调：`mute-toggle()` `monitoring-toggle()` `menu-action(string)`（仅 pill 菜单）
   `hide-window()` `drag-start()` `drag-move()` `drag-end()`（无参；helper 侧全局光标 1:1 跟踪）

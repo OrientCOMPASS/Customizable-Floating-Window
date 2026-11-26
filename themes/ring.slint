@@ -149,17 +149,50 @@ export component FloatingRing inherits Window {
         opacity: !root.streaming && !root.muted && !root.battery-visible ? 1 : 0;
     }
 
-    // ── 中心电量：手机上报时取代中心电平图案 ──
-    //    低电红、充电绿、其余跟随状态色；字体大小随数值位数自适应（100% 也不溢出）
-    Text {
+    // ── 中心电量：手机上报时取代中心电平图案（静音时让位给静音斜杠） ──
+    //    图标 + 百分比：只写数字用户看不出是电量；低电红、充电绿、其余跟随状态色
+    property <color> bat-color: root.battery-level <= 20 ? root.error : (root.battery-charging ? root.mon : root.content);
+    property <float> bat-fill: min(1.0, max(0.0, root.battery-level * 1.0 / 100.0));
+
+    VerticalLayout {
+        x: 0px; y: 0px;
         width: root.win; height: root.win;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        text: root.battery-text;
-        font-size: root.battery-level >= 100 ? 13px : 15px;
-        font-weight: 700;
-        color: root.battery-level <= 20 ? root.error : (root.battery-charging ? root.mon : root.content);
-        opacity: root.battery-visible ? 1 : 0;
+        alignment: center;
+        spacing: 4px;
+        visible: root.battery-visible && !root.muted;
+
+        // 电量图标：外框 + 按百分比填充 + 正极帽
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 26px; height: 12px;
+                border-width: 1.5px;
+                border-radius: 3px;
+                border-color: root.bat-color;
+                background: transparent;
+                Rectangle {
+                    x: 1.5px; y: 1.5px;
+                    width: max(0px, 23px * root.bat-fill);
+                    height: 9px;
+                    border-radius: 1.5px;
+                    background: root.bat-color;
+                }
+                Rectangle {
+                    x: 26px; y: 3px;
+                    width: 3px; height: 6px;
+                    border-radius: 1px;
+                    background: root.bat-color;
+                }
+            }
+        }
+
+        Text {
+            horizontal-alignment: center;
+            text: root.battery-text;
+            font-size: 11px;
+            font-weight: 700;
+            color: root.bat-color;
+        }
     }
 
     // ── 静音斜杠（v1 MutedVisualizer；静态对角线段，无需旋转） ──

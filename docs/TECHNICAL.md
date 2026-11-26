@@ -230,6 +230,10 @@ drag-start() drag-move() drag-end()`（drag 三回调无参：helper 侧全局�
 `battery-visible` 决定显隐即可，无需自己判断 -1。`battery-text` 是 helper 预格式化的
 `"78%"`（Slint 表达式里无法做数字转字符串）。
 
+内置主题的展示约定：`ring` 用「电池图标（外框 + 按百分比填充 + 正极帽）+ 百分比」占据中心，
+**静音时整组隐藏**，把中心让回静音斜杠；`pill` 在信息行右端展示同款小图标 + 百分比，
+窗口宽度按 `battery-visible` 在 224px / 248px 之间切换，避免把时长和设备名挤成省略号。
+
 ### 6.2 `ring.slint` ↔ v1 `FloatingMicWindow` 对照
 
 | v1 (Compose Canvas) | ring.slint |
