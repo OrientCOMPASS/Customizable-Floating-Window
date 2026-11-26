@@ -65,6 +65,8 @@ opss.customizable-floating-window/
 * 输入属性：`input-level` `processed-level` `smooth-level` `level-percent` `muted`
   `streaming` `monitoring` `sample-rate` `channels` `queued-ms` `session-seconds`
   `session-text` `device-label` `device-mode` `info-text` `arc-path` `bars-path`
+* 输入属性（电量，手机上报时才有）：`battery-visible` `battery-level` `battery-charging`
+  `battery-text`（helper 预格式化的 `"78%"`；`ring` 中心与 `pill` 信息行默认展示）
 * 输入属性（转录）：`wdis-text` `wdis-visible`
 * 输出回调：`mute-toggle()` `monitoring-toggle()` `menu-action(string)`（仅 pill 菜单）
   `hide-window()` `drag-start()` `drag-move()` `drag-end()`（无参；helper 侧全局光标 1:1 跟踪）

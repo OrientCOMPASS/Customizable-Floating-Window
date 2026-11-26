@@ -24,6 +24,11 @@ export component FloatingPill inherits Window {
     in property <string> device-label: "";
     in property <string> device-mode: "";
     in property <string> info-text: "";        // "48.0kHz · 1ch · q13ms"（helper 预格式化）
+    // 手机电量（宿主回传 audio_state.battery；缺失即 battery-visible = false）
+    in property <bool> battery-visible: false;
+    in property <int> battery-level: -1;
+    in property <bool> battery-charging: false;
+    in property <string> battery-text: "";     // "78%"（helper 预格式化）
     in property <string> arc-path: "";
     in property <string> wdis-text: "";        // WDIS 语音转录文本
     in property <bool> wdis-visible: false;    // WDIS 展示开关（helper 定时收回）
@@ -178,6 +183,14 @@ export component FloatingPill inherits Window {
                         overflow: elide;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
+                    }
+                    // 电量：只有拿到有效值才出现；充电绿、低电红
+                    Text {
+                        visible: root.battery-visible;
+                        text: root.battery-text;
+                        color: root.battery-level <= 20 ? root.error : (root.battery-charging ? root.ok : #9aa0a6);
+                        font-weight: 600;
+                        vertical-alignment: center;
                     }
                 }
             }

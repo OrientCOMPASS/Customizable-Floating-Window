@@ -219,10 +219,16 @@ show 后 150ms 起单shot 重试链（≤12 次，等窗口映射出句柄）：
 
 属性：`input-level processed-level smooth-level level-percent muted streaming
 monitoring sample-rate channels queued-ms session-seconds session-text
-device-label device-mode info-text arc-path bars-path wdis-text wdis-visible`
+device-label device-mode info-text arc-path bars-path wdis-text wdis-visible
+battery-visible battery-level battery-charging battery-text`
 回调：`mute-toggle() monitoring-toggle() menu-action(string) hide-window()
 drag-start() drag-move() drag-end()`（drag 三回调无参：helper 侧全局光标增量跟踪，
 密集鼠标事件下仍 1:1；见 §12.3）
+
+电量属性来自宿主 `audio_state.battery`（`{ level, charging }`）：收到有效 `0..=100`
+时才置 `battery-visible = true`，否则整套属性保持 `false / -1 / ""`——主题只按
+`battery-visible` 决定显隐即可，无需自己判断 -1。`battery-text` 是 helper 预格式化的
+`"78%"`（Slint 表达式里无法做数字转字符串）。
 
 ### 6.2 `ring.slint` ↔ v1 `FloatingMicWindow` 对照
 
